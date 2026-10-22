@@ -1,0 +1,15 @@
+services:
+  db:
+    image: postgres:17
+    container_name: obs-postgres
+    environment:
+      POSTGRES_DB: ${DB_NAME}
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    ports:
+      - "5433:5432"
+    volumes:
+      - obs_pgdata:/var/lib/postgresql/data
+
+volumes:
+  obs_pgdata:
