@@ -48,6 +48,7 @@ INSTALLED_APPS = [
     'program_outcomes',
     'announcements',
     'library_reservations',
+    'student_feedback',
 ]
 
 MIDDLEWARE = [
