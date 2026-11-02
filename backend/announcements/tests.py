@@ -377,3 +377,17 @@ class StudentAnnouncementWriteTests(AnnouncementAPITestCase):
             with self.subTest(method=method.__name__):
                 response = method(self.detail_url(self.student_post), self.payload, format="json")
                 self.assertEqual(response.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
+
+    def test_returning_to_draft_withdraws_a_post_from_other_users(self):
+        url = self.detail_url(self.student_post)
+        response = self.client.patch(url, {"status": "DRAFT"}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.client.force_authenticate(self.other_student)
+        self.assertEqual(self.client.get(url).status_code, status.HTTP_404_NOT_FOUND)
+        feed = self.client.get(self.list_url)
+        self.assertEqual(feed.data["count"], 0)
+
+    def test_editing_a_missing_post_returns_not_found(self):
+        url = reverse("announcements:student-detail", args=[999999])
+        response = self.client.patch(url, self.payload, format="json")
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
