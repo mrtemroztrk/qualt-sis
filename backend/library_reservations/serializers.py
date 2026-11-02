@@ -1,4 +1,5 @@
 from django.utils import timezone
+from django.utils.dateparse import parse_datetime
 from rest_framework import serializers
 
 from .models import Reservation, StudyRoom
@@ -36,3 +37,24 @@ class ReservationSerializer(serializers.ModelSerializer):
 
     def get_can_cancel(self, reservation):
         return reservation.status == Reservation.Status.CONFIRMED and reservation.starts_at >= timezone.now()
+
+
+class OffsetDateTimeField(serializers.DateTimeField):
+    def to_internal_value(self, value):
+        # Reject ambiguous local times instead of silently treating them as UTC.
+        try:
+            parsed = parse_datetime(value) if isinstance(value, str) else value
+        except (ValueError, TypeError):
+            parsed = None
+        if parsed is not None and hasattr(parsed, "utcoffset") and timezone.is_naive(parsed):
+            raise serializers.ValidationError("Include a UTC offset, such as +03:00 or Z.")
+        return super().to_internal_value(value)
+
+
+class BookingSerializer(serializers.Serializer):
+    room = serializers.IntegerField(min_value=1)
+    starts_at = OffsetDateTimeField()
+
+
+class CancellationSerializer(serializers.Serializer):
+    reason = serializers.CharField(max_length=500, required=False, allow_blank=True, default="")

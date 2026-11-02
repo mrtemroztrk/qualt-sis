@@ -12,8 +12,10 @@ from .models import Reservation, StudyRoom
 from .pagination import LibraryPagination
 from .rules import SLOT_LENGTH
 from .serializers import (
-    AvailabilityQuerySerializer, ReservationQuerySerializer, ReservationSerializer, RoomSerializer,
+    AvailabilityQuerySerializer, BookingSerializer, CancellationSerializer,
+    ReservationQuerySerializer, ReservationSerializer, RoomSerializer,
 )
+from .services import book_room, cancel_reservation
 
 
 class RoomListView(generics.ListAPIView):
@@ -63,3 +65,23 @@ class MyReservationsView(generics.ListAPIView):
         query.is_valid(raise_exception=True)
         own = Reservation.objects.filter(student=self.request.user).select_related("room")
         return filter_reservations(own, query.validated_data)
+
+
+class BookingView(APIView):
+    permission_classes = [IsAuthenticated, IsStudent]
+
+    def post(self, request):
+        payload = BookingSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+        reservation = book_room(request.user.pk, payload.validated_data["room"], payload.validated_data["starts_at"])
+        return Response(ReservationSerializer(reservation).data, status=201)
+
+
+class StudentCancellationView(APIView):
+    permission_classes = [IsAuthenticated, IsStudent]
+
+    def post(self, request, pk):
+        payload = CancellationSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+        reservation = cancel_reservation(pk, request.user, payload.validated_data["reason"])
+        return Response(ReservationSerializer(reservation).data)
