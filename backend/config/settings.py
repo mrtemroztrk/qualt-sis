@@ -47,6 +47,7 @@ INSTALLED_APPS = [
     'accounts',
     'program_outcomes',
     'announcements',
+    'library_reservations',
 ]
 
 MIDDLEWARE = [
