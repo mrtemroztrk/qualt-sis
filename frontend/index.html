@@ -1,0 +1,948 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>QUALT | Student Sign In</title>
+
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    :root {
+      font-family: "Segoe UI", Arial, sans-serif;
+      color-scheme: light;
+      --background: #f5f6f8;
+      --surface: #ffffff;
+      --text: #202a38;
+      --muted: #667085;
+      --border: #dce1e7;
+      --input: #ffffff;
+      --primary: #203e68;
+      --primary-hover: #172f51;
+      --link: #28558b;
+      --focus: #7296c6;
+      --error-background: #fff0ee;
+      --error-text: #a33232;
+      --info-background: #eef3fa;
+      --info-text: #294e7a;
+    }
+
+    body {
+      margin: 0;
+      min-height: 100vh;
+      background: var(--background);
+      color: var(--text);
+      transition: background-color 0.2s, color 0.2s;
+    }
+
+    body.dark-mode {
+      color-scheme: dark;
+      --background: #171a20;
+      --surface: #20242c;
+      --text: #edf0f5;
+      --muted: #a6afbd;
+      --border: #3b424e;
+      --input: #262b34;
+      --primary: #416caa;
+      --primary-hover: #4d7bbb;
+      --link: #aac9f1;
+      --focus: #86a9dd;
+      --error-background: #3b2529;
+      --error-text: #ffc1c1;
+      --info-background: #27364b;
+      --info-text: #c4d8f5;
+    }
+
+    button,
+    input {
+      font: inherit;
+    }
+
+    button {
+      cursor: pointer;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    button:focus-visible {
+      outline: 3px solid var(--focus);
+      outline-offset: 4px;
+    }
+
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      padding: 25px 38px;
+    }
+
+    .brand {
+      font-size: 23px;
+      font-weight: 700;
+      letter-spacing: 4px;
+    }
+
+    .theme-toggle {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 9px;
+      min-height: 42px;
+      padding: 9px 13px;
+      border: 1px solid var(--border);
+      border-radius: 7px;
+      background: var(--surface);
+      color: var(--text);
+      font-size: 13px;
+    }
+
+    .theme-toggle:hover {
+      border-color: var(--muted);
+    }
+
+    .theme-toggle svg {
+      width: 18px;
+      height: 18px;
+    }
+
+    main {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      min-height: calc(100vh - 92px);
+      padding: 35px 20px 60px;
+    }
+
+    .card {
+      width: 100%;
+      max-width: 480px;
+      padding: 40px;
+      border: 1px solid var(--border);
+      border-radius: 10px;
+      background: var(--surface);
+      box-shadow: 0 4px 18px rgba(20, 30, 45, 0.035);
+    }
+
+    .section-label {
+      margin: 0 0 16px;
+      color: var(--muted);
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 1.5px;
+      text-align: center;
+      text-transform: uppercase;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: 31px;
+      font-weight: 650;
+      letter-spacing: -0.8px;
+      line-height: 1.25;
+      text-align: center;
+    }
+
+    .subtitle {
+      margin: 12px 0 32px;
+      color: var(--muted);
+      font-size: 15px;
+      line-height: 1.6;
+      text-align: center;
+    }
+
+    .field {
+      margin-bottom: 23px;
+    }
+
+    .field label {
+      display: block;
+      margin-bottom: 8px;
+      font-size: 14px;
+      font-weight: 600;
+    }
+
+    .field input {
+      width: 100%;
+      height: 50px;
+      padding: 0 14px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      outline: none;
+      background: var(--input);
+      color: var(--text);
+      font-size: 16px;
+    }
+
+    .field input::placeholder {
+      color: var(--muted);
+    }
+
+    .field input:focus {
+      border-color: var(--focus);
+      box-shadow: 0 0 0 3px rgba(110, 145, 195, 0.15);
+    }
+
+    .field input[aria-invalid="true"] {
+      border-color: var(--error-text);
+    }
+
+    .password-wrapper {
+      position: relative;
+    }
+
+    .password-wrapper input {
+      padding-right: 54px;
+    }
+
+    .password-toggle {
+      position: absolute;
+      top: 50%;
+      right: 5px;
+      display: grid;
+      place-items: center;
+      width: 42px;
+      height: 42px;
+      transform: translateY(-50%);
+      border: none;
+      border-radius: 5px;
+      background: transparent;
+      color: var(--muted);
+    }
+
+    .password-toggle svg {
+      width: 21px;
+      height: 21px;
+    }
+
+    .options {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      margin-bottom: 25px;
+      font-size: 13px;
+    }
+
+    .remember {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 34px;
+      color: var(--muted);
+      cursor: pointer;
+    }
+
+    .remember input {
+      width: 17px;
+      height: 17px;
+      margin: 0;
+      accent-color: var(--primary);
+    }
+
+    .text-button {
+      min-height: 34px;
+      padding: 4px 0;
+      border: none;
+      background: transparent;
+      color: var(--link);
+      font-size: inherit;
+    }
+
+    .text-button:hover {
+      text-decoration: underline;
+    }
+
+    .primary-button {
+      width: 100%;
+      min-height: 50px;
+      padding: 12px 16px;
+      border: none;
+      border-radius: 6px;
+      background: var(--primary);
+      color: #ffffff;
+      font-size: 16px;
+      font-weight: 600;
+    }
+
+    .primary-button:hover {
+      background: var(--primary-hover);
+    }
+
+    .primary-button:disabled {
+      opacity: 0.65;
+      cursor: wait;
+    }
+
+    .message {
+      margin: 20px 0 0;
+      padding: 12px 14px;
+      border-radius: 6px;
+      background: var(--error-background);
+      color: var(--error-text);
+      font-size: 14px;
+      line-height: 1.6;
+      white-space: pre-line;
+      overflow-wrap: anywhere;
+    }
+
+    .message:empty {
+      display: none;
+    }
+
+    .message.info {
+      background: var(--info-background);
+      color: var(--info-text);
+    }
+
+    .success-text {
+      margin: 18px 0 25px;
+      color: var(--muted);
+      line-height: 1.7;
+      text-align: center;
+      overflow-wrap: anywhere;
+    }
+
+    .footer {
+      margin: 24px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+      text-align: center;
+    }
+
+    [hidden] {
+      display: none !important;
+    }
+
+    @media (max-width: 600px) {
+      .header {
+        padding: 20px;
+      }
+
+      .brand {
+        font-size: 20px;
+        letter-spacing: 3px;
+      }
+
+      .theme-toggle {
+        padding: 8px 10px;
+        font-size: 12px;
+      }
+
+      main {
+        min-height: calc(100vh - 82px);
+        padding: 25px 18px 40px;
+      }
+
+      .card {
+        padding: 32px 24px;
+      }
+
+      h1 {
+        font-size: 28px;
+      }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      * {
+        transition: none !important;
+      }
+    }
+  </style>
+</head>
+
+<body>
+  <header class="header">
+    <div class="brand">QUALT</div>
+
+    <button
+      type="button"
+      class="theme-toggle"
+      id="theme-toggle"
+      aria-label="Switch to dark mode"
+      aria-pressed="false"
+    >
+      <svg
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        stroke-width="1.8"
+        aria-hidden="true"
+      >
+        <path d="M20.5 14A8.5 8.5 0 0 1 10 3.5 8.5 8.5 0 1 0 20.5 14Z"/>
+      </svg>
+      <span id="theme-label">Dark mode</span>
+    </button>
+  </header>
+
+  <main>
+    <section class="card" aria-label="Account access">
+      <p class="section-label">Student Information System</p>
+
+      <div id="login-panel">
+        <h1>Welcome back</h1>
+        <p class="subtitle">Sign in to your QUALT account.</p>
+
+        <form id="login-form" novalidate>
+          <div class="field">
+            <label for="email">Email address</label>
+            <input
+              type="email"
+              id="email"
+              name="email"
+              placeholder="Enter your email address"
+              autocomplete="username"
+              autocapitalize="none"
+              spellcheck="false"
+              maxlength="254"
+              required
+            >
+          </div>
+
+          <div class="field">
+            <label for="password">Password</label>
+
+            <div class="password-wrapper">
+              <input
+                type="password"
+                id="password"
+                name="password"
+                placeholder="Enter your password"
+                autocomplete="current-password"
+                required
+              >
+
+              <button
+                type="button"
+                class="password-toggle"
+                id="toggle-password"
+                aria-label="Show password"
+                aria-controls="password"
+                aria-pressed="false"
+              >
+                <svg
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.8"
+                  aria-hidden="true"
+                >
+                  <path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12Z"/>
+                  <circle cx="12" cy="12" r="3"/>
+                </svg>
+              </button>
+            </div>
+          </div>
+
+          <div class="options">
+            <label class="remember">
+              <input type="checkbox" id="remember">
+              Remember my email
+            </label>
+
+            <button
+              type="button"
+              class="text-button"
+              id="forgot-password"
+            >
+              Forgot password?
+            </button>
+          </div>
+
+          <button
+            type="submit"
+            class="primary-button"
+            id="login-button"
+          >
+            Sign in
+          </button>
+        </form>
+      </div>
+
+      <div id="change-panel" hidden>
+        <h1>Change your password</h1>
+        <p class="subtitle">
+          Please replace your temporary password to continue.
+        </p>
+
+        <form id="change-form" novalidate>
+          <div class="field">
+            <label for="new-password">New password</label>
+            <input
+              type="password"
+              id="new-password"
+              name="new_password"
+              autocomplete="new-password"
+              placeholder="Enter a new password"
+              required
+            >
+          </div>
+
+          <div class="field">
+            <label for="confirm-password">Confirm new password</label>
+            <input
+              type="password"
+              id="confirm-password"
+              autocomplete="new-password"
+              placeholder="Enter your new password again"
+              required
+            >
+          </div>
+
+          <button
+            type="submit"
+            class="primary-button"
+            id="change-button"
+          >
+            Update password
+          </button>
+        </form>
+      </div>
+
+      <div id="success-panel" hidden>
+        <h1>You're signed in</h1>
+        <p class="success-text" id="welcome-text"></p>
+
+        <button
+          type="button"
+          class="primary-button"
+          id="logout-button"
+        >
+          Sign out
+        </button>
+      </div>
+
+      <p
+        id="message"
+        class="message"
+        role="status"
+        aria-live="polite"
+      ></p>
+
+      <noscript>
+        <p class="message">
+          Please enable JavaScript in your browser to sign in.
+        </p>
+      </noscript>
+    </section>
+
+    <p class="footer">QUALT · Student Information System</p>
+  </main>
+
+  <script>
+    const BACKEND_ORIGIN = "http://localhost:8000";
+    const API_BASE = BACKEND_ORIGIN.replace(/\/+$/, "");
+
+    const ENDPOINTS = {
+      login: "/api/auth/login/",
+      changePassword: "/api/auth/change-password/"
+    };
+
+    const UNAVAILABLE =
+      "This action is currently unavailable. Please try again later.";
+
+    let session = null;
+    let temporaryPassword = "";
+
+    const get = (id) => document.getElementById(id);
+
+    function applyTheme(isDark) {
+      document.body.classList.toggle("dark-mode", isDark);
+      get("theme-label").textContent = isDark ? "Light mode" : "Dark mode";
+      get("theme-toggle").setAttribute("aria-pressed", String(isDark));
+      get("theme-toggle").setAttribute(
+        "aria-label",
+        isDark ? "Switch to light mode" : "Switch to dark mode"
+      );
+    }
+
+    let savedTheme = null;
+
+    try {
+      savedTheme = localStorage.getItem("qualt-theme");
+    } catch {}
+
+    const systemPrefersDark =
+      typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-color-scheme: dark)").matches;
+
+    applyTheme(
+      savedTheme === "dark" ||
+      (savedTheme !== "light" && systemPrefersDark)
+    );
+
+    get("theme-toggle").addEventListener("click", () => {
+      const isDark = !document.body.classList.contains("dark-mode");
+      applyTheme(isDark);
+
+      try {
+        localStorage.setItem("qualt-theme", isDark ? "dark" : "light");
+      } catch {}
+    });
+
+    function showMessage(text, isInfo = false) {
+      get("message").textContent = text;
+      get("message").classList.toggle("info", isInfo);
+    }
+
+    function showPanel(panelId) {
+      ["login-panel", "change-panel", "success-panel"].forEach((id) => {
+        get(id).hidden = id !== panelId;
+      });
+
+      showMessage("");
+    }
+
+    function invalidate(input, message) {
+      input.setAttribute("aria-invalid", "true");
+      showMessage(message);
+      input.focus();
+    }
+
+    document.querySelectorAll("input").forEach((input) => {
+      input.addEventListener("input", () => {
+        input.removeAttribute("aria-invalid");
+      });
+    });
+
+    try {
+      const savedEmail = localStorage.getItem("qualt-email");
+
+      if (savedEmail) {
+        get("email").value = savedEmail;
+        get("remember").checked = true;
+      }
+    } catch {}
+
+    get("remember").addEventListener("change", () => {
+      if (!get("remember").checked) {
+        try {
+          localStorage.removeItem("qualt-email");
+        } catch {}
+      }
+    });
+
+    function saveEmailPreference(email) {
+      try {
+        if (get("remember").checked) {
+          localStorage.setItem("qualt-email", email);
+        } else {
+          localStorage.removeItem("qualt-email");
+        }
+      } catch {}
+    }
+
+    function resetPasswordVisibility() {
+      get("password").type = "password";
+      get("toggle-password").setAttribute("aria-label", "Show password");
+      get("toggle-password").setAttribute("aria-pressed", "false");
+    }
+
+    get("toggle-password").addEventListener("click", () => {
+      const show = get("password").type === "password";
+
+      get("password").type = show ? "text" : "password";
+      get("toggle-password").setAttribute(
+        "aria-label",
+        show ? "Hide password" : "Show password"
+      );
+      get("toggle-password").setAttribute("aria-pressed", String(show));
+    });
+
+    get("forgot-password").addEventListener("click", () => {
+      showMessage(UNAVAILABLE, true);
+    });
+
+    function collectMessages(value) {
+      if (typeof value === "string") {
+        return [value];
+      }
+
+      if (Array.isArray(value)) {
+        return value.flatMap(collectMessages);
+      }
+
+      if (value && typeof value === "object") {
+        return Object.entries(value)
+          .filter(([key]) => key !== "code")
+          .flatMap(([, item]) => collectMessages(item));
+      }
+
+      return [];
+    }
+
+    async function apiPost(path, body, accessToken = null) {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 15000);
+
+      try {
+        const headers = {
+          "Content-Type": "application/json",
+          "Accept": "application/json"
+        };
+
+        if (accessToken) {
+          headers.Authorization = `Bearer ${accessToken}`;
+        }
+
+        const response = await fetch(`${API_BASE}${path}`, {
+          method: "POST",
+          headers,
+          body: JSON.stringify(body),
+          signal: controller.signal
+        });
+
+        const data = await response.json().catch(() => null);
+
+        if (!response.ok) {
+          let message = UNAVAILABLE;
+
+          if (response.status === 401) {
+            message = path === ENDPOINTS.login
+              ? "The email or password is incorrect."
+              : "Your session has expired. Please sign in again.";
+          } else if (response.status === 429) {
+            message = "Too many attempts. Please wait and try again.";
+          } else if (
+            response.status === 400 &&
+            path === ENDPOINTS.changePassword
+          ) {
+            message = collectMessages(data).join("\n") ||
+              "Your password could not be updated. Please try again.";
+          } else if (
+            response.status === 400 &&
+            path === ENDPOINTS.login
+          ) {
+            message = "Please enter a valid email address and password.";
+          }
+
+          const error = new Error(message);
+          error.status = response.status;
+          throw error;
+        }
+
+        if (!data || typeof data !== "object") {
+          throw new Error(UNAVAILABLE);
+        }
+
+        return data;
+      } catch (error) {
+        if (
+          error.name === "AbortError" ||
+          error instanceof TypeError
+        ) {
+          throw new Error(UNAVAILABLE);
+        }
+
+        throw error;
+      } finally {
+        clearTimeout(timer);
+      }
+    }
+
+    async function login(email, password) {
+      const data = await apiPost(ENDPOINTS.login, {
+        email,
+        password
+      });
+
+      if (
+        typeof data.access !== "string" ||
+        typeof data.refresh !== "string" ||
+        !data.user ||
+        typeof data.user.email !== "string" ||
+        typeof data.user.must_change_password !== "boolean"
+      ) {
+        throw new Error(UNAVAILABLE);
+      }
+
+      return data;
+    }
+
+    function finishLogin() {
+      temporaryPassword = "";
+      showPanel("success-panel");
+
+      const name = session.user.first_name || session.user.email;
+      get("welcome-text").textContent = `Welcome, ${name}.`;
+
+      window.dispatchEvent(
+        new CustomEvent("qualt:login", { detail: session })
+      );
+
+      get("logout-button").focus();
+    }
+
+    get("login-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+
+      const button = get("login-button");
+
+      if (button.disabled) {
+        return;
+      }
+
+      showMessage("");
+
+      const emailInput = get("email");
+      const passwordInput = get("password");
+
+      emailInput.value = emailInput.value.trim();
+
+      if (!emailInput.value) {
+        invalidate(emailInput, "Please enter your email address.");
+        return;
+      }
+
+      if (!emailInput.validity.valid) {
+        invalidate(emailInput, "Please enter a valid email address.");
+        return;
+      }
+
+      if (!passwordInput.value) {
+        invalidate(passwordInput, "Please enter your password.");
+        return;
+      }
+
+      const email = emailInput.value;
+      const password = passwordInput.value;
+
+      button.disabled = true;
+      button.textContent = "Signing in…";
+
+      try {
+        session = await login(email, password);
+        saveEmailPreference(email);
+
+        passwordInput.value = "";
+        resetPasswordVisibility();
+
+        if (session.user.must_change_password) {
+          temporaryPassword = password;
+          showPanel("change-panel");
+          get("new-password").focus();
+        } else {
+          finishLogin();
+        }
+      } catch (error) {
+        session = null;
+        temporaryPassword = "";
+        showMessage(error.message);
+      } finally {
+        button.disabled = false;
+        button.textContent = "Sign in";
+      }
+    });
+
+    get("change-form").addEventListener("submit", async (event) => {
+      event.preventDefault();
+
+      const button = get("change-button");
+
+      if (button.disabled) {
+        return;
+      }
+
+      showMessage("");
+
+      if (!session) {
+        showPanel("login-panel");
+        showMessage("Please sign in again.");
+        return;
+      }
+
+      const newPasswordInput = get("new-password");
+      const confirmationInput = get("confirm-password");
+      const newPassword = newPasswordInput.value;
+
+      if (!newPassword) {
+        invalidate(newPasswordInput, "Please enter a new password.");
+        return;
+      }
+
+      if (newPassword !== confirmationInput.value) {
+        invalidate(confirmationInput, "The passwords do not match.");
+        return;
+      }
+
+      button.disabled = true;
+      button.textContent = "Updating password…";
+
+      try {
+        await apiPost(
+          ENDPOINTS.changePassword,
+          {
+            old_password: temporaryPassword,
+            new_password: newPassword
+          },
+          session.access
+        );
+      } catch (error) {
+        if (error.status === 401) {
+          session = null;
+          temporaryPassword = "";
+          get("change-form").reset();
+          showPanel("login-panel");
+          get("email").focus();
+        }
+
+        showMessage(error.message);
+        button.disabled = false;
+        button.textContent = "Update password";
+        return;
+      }
+
+      const email = session.user.email;
+      temporaryPassword = "";
+
+      try {
+        session = await login(email, newPassword);
+        get("change-form").reset();
+
+        if (session.user.must_change_password) {
+          session = null;
+          showPanel("login-panel");
+          showMessage(
+            "Your password was updated. Please sign in again.",
+            true
+          );
+        } else {
+          finishLogin();
+        }
+      } catch {
+        session = null;
+        get("change-form").reset();
+        showPanel("login-panel");
+        get("email").value = email;
+
+        showMessage(
+          "Your password was updated. Please sign in with your new password.",
+          true
+        );
+
+        get("password").focus();
+      } finally {
+        button.disabled = false;
+        button.textContent = "Update password";
+      }
+    });
+
+    get("logout-button").addEventListener("click", () => {
+      session = null;
+      temporaryPassword = "";
+
+      get("password").value = "";
+      get("change-form").reset();
+
+      resetPasswordVisibility();
+      showPanel("login-panel");
+
+      window.dispatchEvent(new CustomEvent("qualt:logout"));
+      get("email").focus();
+    });
+  </script>
+</body>
+</html>
