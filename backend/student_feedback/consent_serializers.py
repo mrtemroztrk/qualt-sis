@@ -99,3 +99,7 @@ class NotificationSerializer(serializers.ModelSerializer):
         model = FeedbackNotification
         fields = ["id", "feedback", "sharing_request", "event", "is_read", "created_at"]
         read_only_fields = fields
+
+
+class NotificationQuerySerializer(serializers.Serializer):
+    unread = serializers.BooleanField(required=False)

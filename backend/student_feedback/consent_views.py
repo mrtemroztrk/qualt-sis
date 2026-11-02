@@ -7,7 +7,7 @@ from rest_framework.views import APIView
 from accounts.permissions import IsInstructor, IsStudent, PasswordChanged
 from .access import requests_for
 from .consent_serializers import (
-    ConsentResponseSerializer, NotificationSerializer, PublishSerializer,
+    ConsentResponseSerializer, NotificationQuerySerializer, NotificationSerializer, PublishSerializer,
     SharingCreateSerializer, SharingRequestSerializer,
 )
 from .consent_services import publish_sharing, request_sharing, respond_to_sharing, withdraw_sharing
@@ -76,7 +76,13 @@ class NotificationListView(generics.ListAPIView):
     pagination_class = FeedbackPagination
 
     def get_queryset(self):
-        return FeedbackNotification.objects.filter(recipient=self.request.user)
+        # Query parameters are not HTML checkboxes: absence means no filter.
+        query = NotificationQuerySerializer(data=self.request.query_params.dict())
+        query.is_valid(raise_exception=True)
+        rows = FeedbackNotification.objects.filter(recipient=self.request.user)
+        if "unread" in query.validated_data:
+            rows = rows.filter(is_read=not query.validated_data["unread"])
+        return rows
 
 
 class NotificationReadView(APIView):

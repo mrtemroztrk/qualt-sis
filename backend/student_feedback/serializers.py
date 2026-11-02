@@ -15,6 +15,7 @@ class InstructorSerializer(serializers.ModelSerializer):
 
 class FeedbackSerializer(serializers.ModelSerializer):
     student = serializers.SerializerMethodField()
+    is_anonymous = serializers.BooleanField(required=False, default=True)
     admin_audit_access = serializers.BooleanField(read_only=True, default=True)
     instructor = serializers.PrimaryKeyRelatedField(
         queryset=User.objects.filter(role=User.Role.INSTRUCTOR, is_active=True),

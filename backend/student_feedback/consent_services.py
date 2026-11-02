@@ -78,6 +78,8 @@ def withdraw_sharing(pk, actor):
     if not ((actor.role == "STUDENT" and proposal.feedback.student_id == actor.pk)
             or (actor.role == "INSTRUCTOR" and proposal.instructor_id == actor.pk)):
         raise PermissionDenied("Only the student or requesting instructor can withdraw sharing.")
+    if proposal.state == "WITHDRAWN":
+        return proposal
     proposal.state = "WITHDRAWN"
     proposal.save(update_fields=["state"])
     notify(proposal.feedback, {proposal.feedback.student_id, proposal.instructor_id} - {actor.pk}, "sharing_withdrawn", proposal)

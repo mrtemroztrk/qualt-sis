@@ -53,6 +53,8 @@ class SharingConsentTests(FeedbackAPITestCase):
         notice = self.client.get("/api/feedback/notifications/").data["results"][0]
         url = f"/api/feedback/notifications/{notice['id']}/read/"
         self.assertTrue(self.client.post(url).data["is_read"])
+        self.assertEqual(self.client.get("/api/feedback/notifications/?unread=true").data["count"], 0)
+        self.assertEqual(self.client.get("/api/feedback/notifications/?unread=false").data["count"], 1)
         self.client.force_authenticate(self.other)
         self.assertEqual(self.client.get("/api/feedback/notifications/").data["count"], 0)
         self.assertEqual(self.client.post(url).status_code, 404)
@@ -89,3 +91,11 @@ class SharingConsentTests(FeedbackAPITestCase):
         ]
         for payload in cases:
             self.assertEqual(self.client.post(url, payload, format="json").status_code, 400)
+
+    def test_original_anonymous_student_cannot_be_identified_before_approval(self):
+        pk = self.share(reveal_identity=True)
+        response = self.client.get(f"/api/feedback/sharing-requests/{pk}/")
+        self.assertIsNone(response.data["student"]["id"])
+        self.respond(pk)
+        response = self.publish(pk)
+        self.assertEqual(response.data["student"]["id"], self.student.pk)
