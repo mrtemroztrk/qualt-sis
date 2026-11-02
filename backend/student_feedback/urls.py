@@ -1,6 +1,6 @@
 from django.urls import path
 
-from . import consent_views, views
+from . import consent_views, discussion_views, views
 
 app_name = "student_feedback"
 
@@ -17,4 +17,9 @@ urlpatterns = [
     path("sharing-requests/<int:pk>/withdraw/", consent_views.WithdrawView.as_view(), name="withdraw"),
     path("notifications/", consent_views.NotificationListView.as_view(), name="notifications"),
     path("notifications/<int:pk>/read/", consent_views.NotificationReadView.as_view(), name="notification-read"),
+    path("discussions/", discussion_views.DiscussionListView.as_view(), name="discussions"),
+    path("discussions/<int:pk>/", discussion_views.DiscussionDetailView.as_view(), name="discussion-detail"),
+    path("discussions/<int:pk>/comments/", discussion_views.DiscussionCommentsView.as_view(), name="comments"),
+    path("discussions/<int:pk>/vote/", discussion_views.VoteView.as_view(), name="vote"),
+    path("discussions/<int:pk>/votes/", discussion_views.VoteAuditView.as_view(), name="vote-audit"),
 ]

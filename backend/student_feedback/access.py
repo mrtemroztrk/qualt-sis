@@ -38,10 +38,10 @@ def requests_for(user):
 
 
 def discussions_for(user):
-    rows = SharingRequest.objects.select_related("feedback__student", "instructor").filter(state="PUBLISHED")
+    rows = SharingRequest.objects.select_related("feedback__student", "instructor")
     if user.role == User.Role.ADMIN:
-        return rows
-    rows = rows.filter(feedback__deleted_at__isnull=True)
+        return rows.filter(published_at__isnull=False)
+    rows = rows.filter(state="PUBLISHED", feedback__deleted_at__isnull=True)
     if user.role == User.Role.STUDENT:
         return rows.filter(Q(visible_to_students=True) | Q(feedback__student=user))
     if user.role == User.Role.INSTRUCTOR:
