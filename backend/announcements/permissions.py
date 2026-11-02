@@ -8,6 +8,8 @@ from .models import Announcement
 def can_publish(user, channel):
     if channel == Announcement.Channel.OFFICIAL:
         return user.role in (User.Role.INSTRUCTOR, User.Role.HEAD, User.Role.ADMIN)
+    if channel == Announcement.Channel.STUDENT:
+        return user.role == User.Role.STUDENT
     return False
 
 

@@ -283,3 +283,97 @@ class OfficialAnnouncementWriteTests(AnnouncementAPITestCase):
             with self.subTest(method=method.__name__):
                 response = method(self.detail_url(self.official), self.payload, format="json")
                 self.assertEqual(response.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
+
+
+class StudentAnnouncementWriteTests(AnnouncementAPITestCase):
+    def setUp(self):
+        self.list_url = reverse("announcements:student-list")
+        self.payload = {"title": "Study group", "body": "Meet in the library at five."}
+        self.client.force_authenticate(self.users[User.Role.STUDENT])
+
+    def test_students_can_create_drafts_and_publish_in_the_student_channel(self):
+        for publication_status in ["DRAFT", "PUBLISHED"]:
+            with self.subTest(status=publication_status):
+                response = self.client.post(
+                    self.list_url, {**self.payload, "status": publication_status}, format="json"
+                )
+                self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+                self.assertEqual(response.data["channel"], "STUDENT")
+                self.assertEqual(response.data["author_id"], self.users[User.Role.STUDENT].pk)
+                self.assertTrue(response.data["can_edit"])
+                feed = self.client.get(self.list_url).data["results"]
+                self.assertEqual(response.data["id"] in [item["id"] for item in feed], publication_status == "PUBLISHED")
+                official_feed = self.client.get(reverse("announcements:official-list"))
+                self.assertNotIn(response.data["id"], [row["id"] for row in official_feed.data["results"]])
+
+    def test_staff_cannot_post_as_students(self):
+        for role in [User.Role.INSTRUCTOR, User.Role.HEAD, User.Role.ADMIN]:
+            with self.subTest(role=role):
+                self.client.force_authenticate(self.users[role])
+                response = self.client.post(self.list_url, self.payload, format="json")
+                self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_students_can_edit_publish_and_archive_their_own_drafts(self):
+        url = self.detail_url(self.draft)
+        for changes in [
+            {"title": "Updated study group", "body": "Meet at six instead."},
+            {"status": "PUBLISHED"},
+            {"status": "ARCHIVED"},
+        ]:
+            with self.subTest(changes=changes):
+                response = self.client.patch(url, changes, format="json")
+                self.assertEqual(response.status_code, status.HTTP_200_OK)
+                for field, value in changes.items():
+                    self.assertEqual(response.data[field], value)
+        self.draft.refresh_from_db()
+        self.assertEqual(self.draft.status, "ARCHIVED")
+        self.assertEqual(self.draft.author_id, self.users[User.Role.STUDENT].pk)
+
+    def test_students_cannot_edit_or_archive_another_students_post(self):
+        self.client.force_authenticate(self.other_student)
+        for changes in [self.payload, {"status": "ARCHIVED"}]:
+            with self.subTest(changes=changes):
+                response = self.client.patch(self.detail_url(self.student_post), changes, format="json")
+                self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.student_post.refresh_from_db()
+        self.assertEqual(self.student_post.status, "PUBLISHED")
+        response = self.client.get(self.detail_url(self.student_post))
+        self.assertFalse(response.data["can_edit"])
+
+    def test_student_payloads_cannot_change_authorship_or_promote_posts_to_official(self):
+        forged = {
+            **self.payload, "channel": "OFFICIAL", "author_id": self.users[User.Role.ADMIN].pk,
+        }
+        response = self.client.post(self.list_url, forged, format="json")
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["channel"], "STUDENT")
+        self.assertEqual(response.data["author_id"], self.users[User.Role.STUDENT].pk)
+        changed = self.client.patch(self.detail_url(self.student_post), forged, format="json")
+        self.assertEqual(changed.status_code, status.HTTP_200_OK)
+        self.assertEqual(changed.data["channel"], "STUDENT")
+        self.assertEqual(changed.data["author_id"], self.users[User.Role.STUDENT].pk)
+
+    def test_first_password_change_is_required_before_student_writes(self):
+        user = self.users[User.Role.STUDENT]
+        user.must_change_password = True
+        user.save()
+        self.client.force_authenticate(user)
+        created = self.client.post(self.list_url, self.payload, format="json")
+        changed = self.client.patch(self.detail_url(self.student_post), self.payload, format="json")
+        self.assertEqual(created.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(changed.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_anonymous_users_cannot_create_or_edit_in_either_channel(self):
+        self.client.force_authenticate(None)
+        for channel, post in [("official", self.official), ("student", self.student_post)]:
+            with self.subTest(channel=channel):
+                created = self.client.post(reverse(f"announcements:{channel}-list"), self.payload, format="json")
+                changed = self.client.patch(self.detail_url(post), self.payload, format="json")
+                self.assertEqual(created.status_code, status.HTTP_401_UNAUTHORIZED)
+                self.assertEqual(changed.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_students_cannot_replace_or_delete_posts(self):
+        for method in [self.client.put, self.client.delete]:
+            with self.subTest(method=method.__name__):
+                response = method(self.detail_url(self.student_post), self.payload, format="json")
+                self.assertEqual(response.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
