@@ -184,6 +184,32 @@ class ProgramOutcomeWriteTests(ProgramOutcomeAPITestCase):
         self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
         self.assertIn("code", response.data)
 
+    def test_editing_cannot_take_an_existing_code(self):
+        other = ProgramOutcome.objects.create(**self.payload)
+        response = self.client.patch(
+            reverse("program_outcomes:detail", args=[other.pk]),
+            {"code": self.outcome.code},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+        other.refresh_from_db()
+        self.assertEqual(other.code, "PO2")
+
+    def test_anonymous_users_cannot_create_or_edit(self):
+        self.client.force_authenticate(user=None)
+        created = self.client.post(self.list_url, self.payload, format="json")
+        changed = self.client.patch(self.detail_url, {"title": "Changed"}, format="json")
+        self.assertEqual(created.status_code, status.HTTP_401_UNAUTHORIZED)
+        self.assertEqual(changed.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_editing_a_missing_outcome_returns_not_found(self):
+        response = self.client.patch(
+            reverse("program_outcomes:detail", args=[self.outcome.pk + 100]),
+            {"title": "Changed"},
+            format="json",
+        )
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
     def test_invalid_fields_return_field_errors(self):
         invalid_fields = [
             ("code", "LO1"), ("code", "PO0"), ("code", "po2"),
