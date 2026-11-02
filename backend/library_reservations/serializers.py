@@ -2,7 +2,7 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 from rest_framework import serializers
 
-from .models import Reservation, StudyRoom
+from .models import LibraryBan, Reservation, StudyRoom
 
 
 class RoomSerializer(serializers.ModelSerializer):
@@ -58,3 +58,44 @@ class BookingSerializer(serializers.Serializer):
 
 class CancellationSerializer(serializers.Serializer):
     reason = serializers.CharField(max_length=500, required=False, allow_blank=True, default="")
+
+
+class AdminCancellationSerializer(serializers.Serializer):
+    reason = serializers.CharField(max_length=500)
+
+
+class BanCreateSerializer(serializers.Serializer):
+    student = serializers.IntegerField(min_value=1)
+    reason = serializers.CharField(max_length=500)
+
+
+class AdminReservationQuerySerializer(ReservationQuerySerializer):
+    student = serializers.IntegerField(min_value=1, required=False)
+    room = serializers.IntegerField(min_value=1, required=False)
+    date = serializers.DateField(required=False)
+
+
+class AdminReservationSerializer(ReservationSerializer):
+    student_name = serializers.CharField(source="student.get_full_name", read_only=True)
+    student_no = serializers.CharField(source="student.student_no", read_only=True)
+
+    class Meta(ReservationSerializer.Meta):
+        fields = ReservationSerializer.Meta.fields + ["student", "student_name", "student_no", "cancelled_by"]
+        read_only_fields = fields
+
+
+class BanSerializer(serializers.ModelSerializer):
+    student_name = serializers.CharField(source="student.get_full_name", read_only=True)
+    student_no = serializers.CharField(source="student.student_no", read_only=True)
+    is_active = serializers.SerializerMethodField()
+
+    class Meta:
+        model = LibraryBan
+        fields = [
+            "id", "student", "student_name", "student_no", "reason", "is_active",
+            "created_by", "created_at", "lifted_by", "lifted_at",
+        ]
+        read_only_fields = fields
+
+    def get_is_active(self, ban):
+        return ban.lifted_at is None

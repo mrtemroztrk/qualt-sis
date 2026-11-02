@@ -70,3 +70,32 @@ def cancel_reservation(reservation_id, actor, reason=""):
     reservation.cancellation_reason = reason
     reservation.save(update_fields=["status", "cancelled_at", "cancelled_by", "cancellation_reason"])
     return reservation
+
+
+@transaction.atomic
+def ban_student(student_id, actor, reason):
+    student = get_object_or_404(User.objects.select_for_update(), pk=student_id)
+    if student.role != User.Role.STUDENT:
+        raise ValidationError({"student": "Choose a student account."})
+    if LibraryBan.objects.filter(student=student, lifted_at__isnull=True).exists():
+        raise ReservationConflict("already_banned", "This student already has an active library ban.")
+    ban = LibraryBan.objects.create(student=student, reason=reason, created_by=actor)
+    now = timezone.now()
+    cancelled_count = confirmed_reservations(student).filter(starts_at__gte=now).update(
+        status=Reservation.Status.CANCELLED, cancelled_at=now, cancelled_by=actor,
+        cancellation_reason="Cancelled because of a library ban.",
+    )
+    return ban, cancelled_count
+
+
+@transaction.atomic
+def lift_ban(ban_id, actor):
+    ban = get_object_or_404(LibraryBan, pk=ban_id)
+    User.objects.select_for_update().get(pk=ban.student_id)
+    ban.refresh_from_db()
+    if ban.lifted_at is None:
+        ban.lifted_at = timezone.now()
+        ban.lifted_by = actor
+        ban.save(update_fields=["lifted_at", "lifted_by"])
+    # Cancelled reservations are not restored when the ban is lifted.
+    return ban
