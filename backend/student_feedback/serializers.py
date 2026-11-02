@@ -15,6 +15,7 @@ class InstructorSerializer(serializers.ModelSerializer):
 
 class FeedbackSerializer(serializers.ModelSerializer):
     student = serializers.SerializerMethodField()
+    admin_audit_access = serializers.BooleanField(read_only=True, default=True)
     instructor = serializers.PrimaryKeyRelatedField(
         queryset=User.objects.filter(role=User.Role.INSTRUCTOR, is_active=True),
         required=False, allow_null=True,
@@ -22,7 +23,7 @@ class FeedbackSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = Feedback
-        fields = ["id", "student", "instructor", "audience", "is_anonymous", "title", "body", "created_at", "deleted_at"]
+        fields = ["id", "student", "instructor", "audience", "is_anonymous", "title", "body", "created_at", "deleted_at", "admin_audit_access"]
         read_only_fields = ["id", "student", "created_at", "deleted_at"]
 
     def get_student(self, feedback):
