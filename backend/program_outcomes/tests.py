@@ -1,6 +1,11 @@
 from django.core.exceptions import ValidationError
 from django.db import IntegrityError, transaction
 from django.test import TestCase
+from django.urls import reverse
+from rest_framework import status
+from rest_framework.test import APITestCase
+
+from accounts.models import User
 
 from .models import ProgramOutcome
 
@@ -41,3 +46,68 @@ class ProgramOutcomeModelTests(TestCase):
         self.outcome.is_active = False
         self.outcome.save()
         self.assertTrue(ProgramOutcome.objects.filter(pk=self.outcome.pk).exists())
+
+
+class ProgramOutcomeReadTests(APITestCase):
+    @classmethod
+    def setUpTestData(cls):
+        cls.users = {
+            role: User.objects.create_user(
+                username=f"{role.lower()}@example.test",
+                email=f"{role.lower()}@example.test",
+                password="Outcome-Test-482!",
+                role=role,
+                must_change_password=False,
+            )
+            for role in User.Role.values
+        }
+        cls.outcome = ProgramOutcome.objects.create(
+            code="PO1",
+            title="Problem solving",
+            description="Identify and solve engineering problems.",
+        )
+
+    def setUp(self):
+        self.list_url = reverse("program_outcomes:list")
+        self.detail_url = reverse("program_outcomes:detail", args=[self.outcome.pk])
+
+    def test_anonymous_requests_require_login(self):
+        for url in [self.list_url, self.detail_url]:
+            with self.subTest(url=url):
+                response = self.client.get(url)
+                self.assertEqual(response.status_code, status.HTTP_401_UNAUTHORIZED)
+
+    def test_all_four_roles_can_read_outcomes(self):
+        for role, user in self.users.items():
+            with self.subTest(role=role):
+                self.client.force_authenticate(user)
+                response = self.client.get(self.list_url)
+                self.assertEqual(response.status_code, status.HTTP_200_OK)
+                self.assertEqual(response.data[0]["code"], "PO1")
+                detail = self.client.get(self.detail_url)
+                self.assertEqual(detail.status_code, status.HTTP_200_OK)
+                self.assertEqual(detail.data["id"], self.outcome.pk)
+
+    def test_first_password_change_is_required(self):
+        user = self.users[User.Role.STUDENT]
+        user.must_change_password = True
+        user.save()
+        self.client.force_authenticate(user)
+        for url in [self.list_url, self.detail_url]:
+            with self.subTest(url=url):
+                response = self.client.get(url)
+                self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_missing_outcome_returns_not_found(self):
+        self.client.force_authenticate(self.users[User.Role.STUDENT])
+        response = self.client.get(
+            reverse("program_outcomes:detail", args=[self.outcome.pk + 100])
+        )
+        self.assertEqual(response.status_code, status.HTTP_404_NOT_FOUND)
+
+    def test_empty_list_is_a_json_array(self):
+        ProgramOutcome.objects.all().delete()
+        self.client.force_authenticate(self.users[User.Role.STUDENT])
+        response = self.client.get(self.list_url)
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.assertEqual(response.data, [])
