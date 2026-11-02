@@ -182,3 +182,104 @@ class AnnouncementReadTests(AnnouncementAPITestCase):
         first_ids = {row["id"] for row in first.data["results"]}
         self.assertFalse(first_ids.intersection(row["id"] for row in second.data["results"]))
         self.assertIsNotNone(first.data["next"])
+from datetime import timedelta
+from unittest.mock import patch
+
+
+
+class OfficialAnnouncementWriteTests(AnnouncementAPITestCase):
+    def setUp(self):
+        self.list_url = reverse("announcements:official-list")
+        self.payload = {"title": "Campus notice", "body": "The campus library opens at nine."}
+        self.client.force_authenticate(self.users[User.Role.INSTRUCTOR])
+
+    def test_instructors_heads_and_admins_can_create_official_drafts(self):
+        for role in [User.Role.INSTRUCTOR, User.Role.HEAD, User.Role.ADMIN]:
+            with self.subTest(role=role):
+                self.client.force_authenticate(self.users[role])
+                response = self.client.post(self.list_url, self.payload, format="json")
+                self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+                self.assertEqual(response.data["channel"], "OFFICIAL")
+                self.assertEqual(response.data["author_id"], self.users[role].pk)
+                self.assertEqual(response.data["status"], "DRAFT")
+                self.assertTrue(response.data["can_edit"])
+                self.assertIsNone(response.data["published_at"])
+
+    def test_students_cannot_create_or_edit_official_announcements(self):
+        self.client.force_authenticate(self.users[User.Role.STUDENT])
+        created = self.client.post(
+            self.list_url, {**self.payload, "channel": "STUDENT", "status": "PUBLISHED"}, format="json"
+        )
+        changed = self.client.patch(self.detail_url(self.official), self.payload, format="json")
+        self.assertEqual(created.status_code, status.HTTP_403_FORBIDDEN)
+        self.assertEqual(changed.status_code, status.HTTP_403_FORBIDDEN)
+
+    def test_publishing_and_archiving_changes_feed_visibility(self):
+        created = self.client.post(self.list_url, self.payload, format="json")
+        announcement = Announcement.objects.get(pk=created.data["id"])
+        url = self.detail_url(announcement)
+        published = self.client.patch(url, {"status": "PUBLISHED"}, format="json")
+        self.assertEqual(published.status_code, status.HTTP_200_OK)
+        self.assertIsNotNone(published.data["published_at"])
+        self.assertIn(announcement.pk, [row["id"] for row in self.client.get(self.list_url).data["results"]])
+        archived = self.client.patch(url, {"status": "ARCHIVED"}, format="json")
+        self.assertEqual(archived.status_code, status.HTTP_200_OK)
+        self.assertNotIn(announcement.pk, [row["id"] for row in self.client.get(self.list_url).data["results"]])
+        mine = self.client.get(reverse("announcements:official-mine"))
+        self.assertIn(announcement.pk, [row["id"] for row in mine.data["results"]])
+
+    def test_editing_text_does_not_move_a_published_post_to_the_top(self):
+        published_at = self.official.published_at
+        response = self.client.patch(
+            self.detail_url(self.official), {"title": "Updated office hours", "status": "PUBLISHED"}, format="json"
+        )
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.official.refresh_from_db()
+        self.assertEqual(self.official.published_at, published_at)
+
+    def test_republishing_records_the_new_publication_time(self):
+        url = self.detail_url(self.official)
+        self.client.patch(url, {"status": "ARCHIVED"}, format="json")
+        later = self.official.published_at + timedelta(hours=1)
+        with patch("announcements.serializers.timezone.now", return_value=later):
+            response = self.client.patch(url, {"status": "PUBLISHED"}, format="json")
+        self.assertEqual(response.status_code, status.HTTP_200_OK)
+        self.official.refresh_from_db()
+        self.assertEqual(self.official.published_at, later)
+
+    def test_other_writers_cannot_edit_someone_elses_official_post(self):
+        for role in [User.Role.HEAD, User.Role.ADMIN]:
+            with self.subTest(role=role):
+                self.client.force_authenticate(self.users[role])
+                detail = self.client.get(self.detail_url(self.official))
+                self.assertFalse(detail.data["can_edit"])
+                response = self.client.patch(self.detail_url(self.official), self.payload, format="json")
+                self.assertEqual(response.status_code, status.HTTP_403_FORBIDDEN)
+        self.official.refresh_from_db()
+        self.assertEqual(self.official.title, "Office hours")
+
+    def test_invalid_content_and_status_return_field_errors(self):
+        for field, value in [
+            ("title", "  "), ("title", "x" * 201), ("body", ""),
+            ("body", "x" * 10001), ("status", "SCHEDULED"),
+        ]:
+            with self.subTest(field=field):
+                response = self.client.post(self.list_url, {**self.payload, field: value}, format="json")
+                self.assertEqual(response.status_code, status.HTTP_400_BAD_REQUEST)
+                self.assertIn(field, response.data)
+
+    def test_server_controls_the_author_channel_and_timestamps(self):
+        response = self.client.post(self.list_url, {
+            **self.payload, "status": "PUBLISHED", "channel": "STUDENT",
+            "author_id": self.other_student.pk, "published_at": "2099-01-01T00:00:00Z",
+        }, format="json")
+        self.assertEqual(response.status_code, status.HTTP_201_CREATED)
+        self.assertEqual(response.data["channel"], "OFFICIAL")
+        self.assertEqual(response.data["author_id"], self.users[User.Role.INSTRUCTOR].pk)
+        self.assertNotIn("2099", response.data["published_at"])
+
+    def test_deleting_and_full_replacement_are_not_supported(self):
+        for method in [self.client.delete, self.client.put]:
+            with self.subTest(method=method.__name__):
+                response = method(self.detail_url(self.official), self.payload, format="json")
+                self.assertEqual(response.status_code, status.HTTP_405_METHOD_NOT_ALLOWED)
