@@ -7,4 +7,5 @@ urlpatterns = [
     path("api/program-outcomes/", include("program_outcomes.urls")),
     path("api/announcements/", include("announcements.urls")),
     path("api/library/", include("library_reservations.urls")),
+    path("api/feedback/", include("student_feedback.urls")),
 ]
