@@ -12,8 +12,8 @@ class CustomUserAdmin(UserAdmin):
     search_fields = ("email", "username", "student_no")
 
     fieldsets = UserAdmin.fieldsets + (
-        ("Academic", {"fields": ("role", "student_no", "must_change_password")}),
+        ("Academic", {"fields": ("role", "student_no", "department", "advisor", "class_year", "must_change_password")}),
     )
     add_fieldsets = UserAdmin.add_fieldsets + (
-        ("Academic", {"fields": ("email", "role", "student_no")}),
+        ("Academic", {"fields": ("email", "role", "student_no", "department", "advisor", "class_year")}),
     )

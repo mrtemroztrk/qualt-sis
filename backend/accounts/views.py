@@ -8,9 +8,11 @@ from .permissions import IsAdmin
 from .serializers import (
     ChangePasswordSerializer,
     LoginSerializer,
+    UserAssignmentSerializer,
     UserCreateSerializer,
     UserSerializer,
 )
+from .models import User
 
 
 class LoginView(TokenObtainPairView):
@@ -49,3 +51,10 @@ class ChangePasswordView(APIView):
 class CreateUserView(generics.CreateAPIView):
     permission_classes = [IsAdmin]
     serializer_class = UserCreateSerializer
+
+
+class UserAssignmentView(generics.RetrieveUpdateAPIView):
+    permission_classes = [IsAdmin]
+    serializer_class = UserAssignmentSerializer
+    queryset = User.objects.all()
+    http_method_names = ["get", "patch", "head", "options"]
