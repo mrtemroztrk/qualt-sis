@@ -123,6 +123,13 @@ class ManageSectionDetailView(generics.RetrieveUpdateDestroyAPIView):
         return Response(status=status.HTTP_204_NO_CONTENT)
 
 
+def section_roster(section):
+    """Everyone holding a seat in the section, whatever their form's status."""
+    return section.registration_items.select_related("registration__student").order_by(
+        "registration__student__student_no", "id",
+    )
+
+
 class ManageSectionStudentsView(generics.ListAPIView):
     permission_classes = [IsCourseManager]
     serializer_class = SectionStudentSerializer
@@ -132,7 +139,18 @@ class ManageSectionStudentsView(generics.ListAPIView):
         section = get_object_or_404(
             Section, pk=self.kwargs["pk"], course__in=manageable_courses(self.request.user),
         )
-        return User.objects.filter(registrations__items__section=section).order_by("student_no")
+        return section_roster(section)
+
+
+class InstructorSectionStudentsView(generics.ListAPIView):
+    """An instructor's roster for a section they teach; other sections answer 404."""
+
+    permission_classes = [IsTeachingStaff]
+    serializer_class = SectionStudentSerializer
+    pagination_class = CoursePagination
+
+    def get_queryset(self):
+        return section_roster(get_object_or_404(Section, pk=self.kwargs["pk"], instructor=self.request.user))
 
 
 # Term plans: HEAD for its department (mandatory courses, elective count), ADMIN

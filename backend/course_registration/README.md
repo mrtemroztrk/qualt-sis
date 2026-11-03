@@ -148,7 +148,7 @@ courses. `kind` and `department` are set from the role; clients do not send them
 | GET, PATCH | `/api/courses/manage/courses/<id>/` | | No delete. Send `is_active: false` to close a course |
 | GET, POST | `/api/courses/manage/sections/?term=` | `{course, term, number, instructor, quota, meeting_times: [{weekday, start_time, end_time, room}]}` | `instructor` must be an active INSTRUCTOR or HEAD |
 | GET, PATCH, DELETE | `/api/courses/manage/sections/<id>/` | | `meeting_times` replaces the whole list. Quota cannot go below seats taken. Once a student holds a seat, the section cannot be deleted and its course and term cannot change |
-| GET | `/api/courses/manage/sections/<id>/students/` | | Students holding a seat |
+| GET | `/api/courses/manage/sections/<id>/students/` | | Students holding a seat (same rows as the instructor roster below) |
 | GET, POST | `/api/courses/manage/plans/?term=&department=` | `{department, term, class_year, mandatory_courses: [ids], elective_count, elective_options: [ids]}` | A HEAD omits `department` (their own is used). Only the ADMIN may send `elective_options` (403 otherwise) |
 | GET, PATCH, DELETE | `/api/courses/manage/plans/<id>/` | | Reads return course summaries instead of ids |
 
@@ -159,6 +159,11 @@ courses. `kind` and `department` are set from the role; clients do not send them
 | GET | `/api/courses/sections/` | `term, department, kind, search` (code or name) | Anyone signed in. The course cards |
 | GET | `/api/courses/my-plan/` | `term` (required) | STUDENT. 404 if no plan exists for their department and class year. Each mandatory course has `missing_prerequisites` |
 | GET | `/api/courses/my-sections/` | `term` | INSTRUCTOR, HEAD: sections they teach |
+| GET | `/api/courses/my-sections/<id>/students/` | | INSTRUCTOR, HEAD: roster of a section they teach (404 for other sections) |
+
+A roster row is the student plus their seat:
+`{id, student_no, first_name, last_name, email, class_year, is_retake, registration_status}`.
+Every seat holder is listed, whatever their form's status.
 
 A section (course card) looks like this:
 
@@ -250,8 +255,26 @@ once the advisor approves it.
 | Method | Path | Body / query | Notes |
 |---|---|---|---|
 | GET | `/api/registration/advisor/` | `term, status` (e.g. `SUBMITTED`) | Forms of the caller's advisees, oldest submission first |
+| GET | `/api/registration/advisor/students/` | `term` (required), `status` | **Every** advisee, including those without a form. `registration` is `{id, status, submitted_at, decided_at}` or `null`. `status=NONE` lists those who have not started |
 | POST | `/api/registration/advisor/<form id>/approve/` | `{note?}` | |
 | POST | `/api/registration/advisor/<form id>/return/` | `{note}` | Note required (400 without it) |
+
+---
+
+## Panels
+
+Route by `user.role` from the login response. The backend checks the role on every
+request, so a wrong route only gets 403s.
+
+| Panel | Screens | Endpoints |
+|---|---|---|
+| Student | My plan, retakes, course catalog, my form (add, remove, submit), weekly schedule | `my-plan`, `registration/retakes`, `sections`, `registration/mine`, `registration/items`, `registration/<id>/submit`, `registration/schedule` |
+| Instructor | My sections and rosters; my advisees and their forms (approve, return) | `my-sections`, `my-sections/<id>/students`, `registration/advisor/students`, `registration/advisor`, `approve`, `return` |
+| Department head | Mandatory courses, sections, rosters, term plans, **plus everything in the instructor panel** | `manage/courses`, `manage/sections`, `manage/sections/<id>/students`, `manage/plans` |
+| Admin | Departments, user assignments, terms, electives and their sections, elective options in plans | `departments`, `auth/users`, `terms`, `manage/courses`, `manage/sections`, `manage/plans` |
+
+CORS allows `http://localhost:5173` only (`CORS_ALLOWED_ORIGINS` in
+`config/settings.py`). A frontend served from another origin must be added there.
 
 ---
 

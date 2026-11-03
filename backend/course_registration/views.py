@@ -5,6 +5,7 @@ from rest_framework.exceptions import NotFound, ValidationError
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
+from accounts.models import User
 from accounts.permissions import IsStudent
 from courses.models import MeetingTime, Section, Term
 from courses.pagination import CoursePagination
@@ -12,7 +13,7 @@ from courses.permissions import IsTeachingStaff
 from courses.serializers import CourseSummarySerializer
 
 from .models import Registration, RegistrationItem
-from .serializers import AddSectionSerializer, DecisionSerializer, RegistrationSerializer
+from .serializers import AddSectionSerializer, AdviseeSerializer, DecisionSerializer, RegistrationSerializer
 from .services import (
     add_section, decide_registration, remove_section, required_retakes, retake_courses, submit_registration,
 )
@@ -172,6 +173,30 @@ class AdvisorRegistrationListView(generics.ListAPIView):
         if params.get("status"):
             registrations = registrations.filter(status=params["status"])
         return registrations.order_by("submitted_at", "id")
+
+
+class AdvisorStudentListView(generics.ListAPIView):
+    """All of the caller's advisees with this term's form, including those who have not started.
+
+    ?status= filters by form status; NONE means no form yet this term.
+    """
+
+    permission_classes = [IsTeachingStaff]
+    serializer_class = AdviseeSerializer
+    pagination_class = CoursePagination
+
+    def get_queryset(self):
+        term = term_from_query(self.request)
+        forms = Registration.objects.filter(term=term)
+        students = User.objects.filter(advisor=self.request.user, role=User.Role.STUDENT).prefetch_related(
+            Prefetch("registrations", queryset=forms, to_attr="term_registrations"),
+        )
+        wanted = self.request.query_params.get("status")
+        if wanted == "NONE":
+            students = students.exclude(registrations__term=term)
+        elif wanted:
+            students = students.filter(registrations__term=term, registrations__status=wanted)
+        return students.order_by("student_no", "id")
 
 
 class AdvisorDecisionView(APIView):

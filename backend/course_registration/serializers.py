@@ -58,6 +58,23 @@ class RegistrationSerializer(serializers.ModelSerializer):
         return data
 
 
+class AdviseeSerializer(serializers.ModelSerializer):
+    """An advisee and their form for the requested term (null when they have not started)."""
+
+    registration = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = ["id", "student_no", "first_name", "last_name", "email", "class_year", "registration"]
+
+    def get_registration(self, student):
+        forms = getattr(student, "term_registrations", [])
+        if not forms:
+            return None
+        form = forms[0]
+        return {"id": form.id, "status": form.status, "submitted_at": form.submitted_at, "decided_at": form.decided_at}
+
+
 class AddSectionSerializer(serializers.Serializer):
     section = serializers.IntegerField(min_value=1)
 

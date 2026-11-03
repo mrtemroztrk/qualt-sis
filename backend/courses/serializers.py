@@ -213,7 +213,14 @@ class SectionCatalogSerializer(serializers.ModelSerializer):
         return taken if taken is not None else section.registration_items.count()
 
 
-class SectionStudentSerializer(serializers.ModelSerializer):
-    class Meta:
-        model = User
-        fields = ["id", "student_no", "first_name", "last_name", "email"]
+class SectionStudentSerializer(serializers.Serializer):
+    """One seat in a section (a course_registration RegistrationItem), shown as its student."""
+
+    id = serializers.IntegerField(source="registration.student.id")
+    student_no = serializers.CharField(source="registration.student.student_no")
+    first_name = serializers.CharField(source="registration.student.first_name")
+    last_name = serializers.CharField(source="registration.student.last_name")
+    email = serializers.EmailField(source="registration.student.email")
+    class_year = serializers.IntegerField(source="registration.student.class_year")
+    is_retake = serializers.BooleanField()
+    registration_status = serializers.CharField(source="registration.status")

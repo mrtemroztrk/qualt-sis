@@ -12,6 +12,7 @@ urlpatterns = [
     path("items/<int:pk>/", views.RemoveSectionView.as_view(), name="remove-section"),
     path("<int:pk>/submit/", views.SubmitRegistrationView.as_view(), name="submit"),
     path("advisor/", views.AdvisorRegistrationListView.as_view(), name="advisor-list"),
+    path("advisor/students/", views.AdvisorStudentListView.as_view(), name="advisor-students"),
     path("advisor/<int:pk>/approve/", views.AdvisorDecisionView.as_view(approve=True), name="advisor-approve"),
     path("advisor/<int:pk>/return/", views.AdvisorDecisionView.as_view(approve=False), name="advisor-return"),
 ]

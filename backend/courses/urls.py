@@ -9,6 +9,7 @@ urlpatterns = [
     path("terms/<int:pk>/", views.TermDetailView.as_view(), name="term-detail"),
     path("sections/", views.CatalogSectionListView.as_view(), name="catalog"),
     path("my-sections/", views.InstructorSectionListView.as_view(), name="my-sections"),
+    path("my-sections/<int:pk>/students/", views.InstructorSectionStudentsView.as_view(), name="my-section-students"),
     path("my-plan/", views.MyPlanView.as_view(), name="my-plan"),
     path("manage/courses/", views.ManageCourseListView.as_view(), name="manage-courses"),
     path("manage/courses/<int:pk>/", views.ManageCourseDetailView.as_view(), name="manage-course-detail"),
