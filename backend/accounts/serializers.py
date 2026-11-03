@@ -28,6 +28,29 @@ class LoginSerializer(TokenObtainPairSerializer):
         return data
 
 
+MAX_CLASS_YEAR = 6
+
+
+def validate_academic_assignment(role, department, advisor, class_year):
+    """Return cleaned (department, advisor, class_year) for a role, or raise ValidationError."""
+    if role == User.Role.ADMIN:
+        return None, None, None
+    if department is None:
+        raise serializers.ValidationError({"department": "This role must belong to a department."})
+    if not department.is_active:
+        raise serializers.ValidationError({"department": "Choose an active department."})
+    if role != User.Role.STUDENT:
+        return department, None, None
+    if class_year is None or not 1 <= class_year <= MAX_CLASS_YEAR:
+        raise serializers.ValidationError({"class_year": f"Students need a class year from 1 to {MAX_CLASS_YEAR}."})
+    if advisor is not None:
+        if advisor.role not in User.ADVISOR_ROLES or not advisor.is_active:
+            raise serializers.ValidationError({"advisor": "The advisor must be an active instructor."})
+        if advisor.department_id != department.pk:
+            raise serializers.ValidationError({"advisor": "The advisor must be in the student's department."})
+    return department, advisor, class_year
+
+
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
@@ -40,7 +63,30 @@ class UserSerializer(serializers.ModelSerializer):
             "role",
             "student_no",
             "must_change_password",
+            "department",
+            "advisor",
+            "class_year",
         ]
+
+
+class UserAssignmentSerializer(serializers.ModelSerializer):
+    """ADMIN changes a user's department, advisor and class year; the role stays as it is."""
+
+    class Meta:
+        model = User
+        fields = ["id", "email", "role", "department", "advisor", "class_year"]
+        read_only_fields = ["id", "email", "role"]
+
+    def validate(self, attrs):
+        department = attrs.get("department", self.instance.department)
+        advisor = attrs.get("advisor", self.instance.advisor)
+        class_year = attrs.get("class_year", self.instance.class_year)
+        if advisor is not None and advisor.pk == self.instance.pk:
+            raise serializers.ValidationError({"advisor": "A user cannot advise themselves."})
+        attrs["department"], attrs["advisor"], attrs["class_year"] = validate_academic_assignment(
+            self.instance.role, department, advisor, class_year,
+        )
+        return attrs
 
 
 class ChangePasswordSerializer(serializers.Serializer):
@@ -61,7 +107,9 @@ class ChangePasswordSerializer(serializers.Serializer):
 class UserCreateSerializer(serializers.ModelSerializer):
     class Meta:
         model = User
-        fields = ["id", "email", "first_name", "last_name", "role", "student_no"]
+        fields = [
+            "id", "email", "first_name", "last_name", "role", "student_no", "department", "advisor", "class_year",
+        ]
 
     def validate(self, attrs):
         role = attrs.get("role", User.Role.STUDENT)
@@ -72,6 +120,9 @@ class UserCreateSerializer(serializers.ModelSerializer):
         if role != User.Role.STUDENT:
             attrs["student_no"] = None
 
+        attrs["department"], attrs["advisor"], attrs["class_year"] = validate_academic_assignment(
+            role, attrs.get("department"), attrs.get("advisor"), attrs.get("class_year"),
+        )
         return attrs
 
     def create(self, validated_data):
