@@ -278,9 +278,18 @@ def decide_registration(advisor, registration_id, approve, note=""):
         raise RegistrationConflict("not_submitted", "Only submitted forms can be approved or returned.")
     if not approve and not note.strip():
         raise ValidationError({"note": "Tell the student why the form is returned."})
+    now = timezone.now()
     registration.status = Registration.Status.APPROVED if approve else Registration.Status.RETURNED
-    registration.decided_at = timezone.now()
+    registration.decided_at = now
     registration.decided_by = advisor
     registration.advisor_note = note
-    registration.save(update_fields=["status", "decided_at", "decided_by", "advisor_note", "updated_at"])
+    fields = ["status", "decided_at", "decided_by", "advisor_note", "updated_at"]
+    if approve:
+        # Remember what was approved; _reopen() leaves this alone during add-drop.
+        registration.approved_items = [
+            {"section": item.section_id, "is_retake": item.is_retake} for item in registration.items.all()
+        ]
+        registration.last_approved_at = now
+        fields += ["approved_items", "last_approved_at"]
+    registration.save(update_fields=fields)
     return registration

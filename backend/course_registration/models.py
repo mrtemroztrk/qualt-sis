@@ -24,6 +24,11 @@ class Registration(models.Model):
         related_name="decided_registrations",
     )
     advisor_note = models.TextField(blank=True)
+    # The sections of the last approved version, kept while the student changes the
+    # form during add-drop, so the weekly schedule stays visible until re-approval.
+    # [{"section": <id>, "is_retake": <bool>}]
+    approved_items = models.JSONField(default=list, blank=True)
+    last_approved_at = models.DateTimeField(null=True, blank=True)
     created_at = models.DateTimeField(auto_now_add=True)
     updated_at = models.DateTimeField(auto_now=True)
 

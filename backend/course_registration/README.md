@@ -187,6 +187,7 @@ Electives have `"kind": "ELECTIVE"` and `"department": null`.
 |---|---|---|---|
 | GET | `/api/registration/mine/` | `term` | The student's forms (paginated) |
 | GET | `/api/registration/retakes/` | `term` (required) | `[{...course, "required": true}]` |
+| GET | `/api/registration/schedule/` | `term` (required) | Weekly timetable of the **last approved** form (see below). 404 if the form was never approved |
 | POST | `/api/registration/items/` | `{section}` | The whole form, 201 |
 | DELETE | `/api/registration/items/<item id>/` | | The whole form, 200 |
 | POST | `/api/registration/<form id>/submit/` | | The whole form, 200 |
@@ -206,6 +207,41 @@ Every write returns the whole form, so the client does not need a second request
   ],
   "total_credit": 12, "total_ects": 21,
   "counted_credit": 8, "counted_ects": 15
+}
+```
+
+#### Weekly schedule
+
+`GET /api/registration/schedule/?term=` returns the **last approved** version of
+the form, one slot per meeting time, grouped by weekday (Monday = 1) and sorted
+by start time. Only days with classes are listed. Courses without meeting times
+are in `unscheduled`. Hours and rooms are always the sections' current ones.
+
+During add-drop, the student's changes wait for the advisor. Meanwhile the
+schedule keeps showing the approved version with `has_pending_changes: true`
+(`form_status` tells where the new version is), and switches to the new version
+once the advisor approves it.
+
+```json
+{
+  "registration_id": 5,
+  "term": 1,
+  "approved_at": "2026-11-03T18:29:39Z",
+  "has_pending_changes": false,
+  "form_status": "APPROVED",
+  "days": [
+    {"weekday": 1, "name": "Monday", "slots": [
+      {"start_time": "09:00:00", "end_time": "12:00:00", "room": "B-201",
+       "section_id": 3, "section_number": 1,
+       "course": {"code": "CSE 301", "name": "Bilgisayar Mimarisi", "kind": "MANDATORY"},
+       "instructor": "Cengiz Riva", "is_retake": false, "conflicts_with": ["CSE 101"]},
+      {"start_time": "10:00:00", "end_time": "12:00:00", "room": "",
+       "section_id": 1, "section_number": 1,
+       "course": {"code": "CSE 101", "name": "Programlamaya Giriş", "kind": "MANDATORY"},
+       "instructor": "Elif Şahin", "is_retake": true, "conflicts_with": ["CSE 301"]}
+    ]}
+  ],
+  "unscheduled": []
 }
 ```
 
@@ -304,6 +340,11 @@ docker compose exec web python manage.py migrate
 docker compose exec web python manage.py test departments courses course_registration --noinput
 ```
 
+After `git pull` or switching branches, restart the server:
+`docker compose restart web`. Many files change at once, and the development
+server can miss a change made while it is already reloading. A symptom is a new
+endpoint answering Django's "Page not found" page.
+
 ### Demo data (local databases only)
 
 ```bash
@@ -341,5 +382,5 @@ shows a retake conflict. CSE 305 has a quota of 2. UNI 103 exists but is not off
 - `CompletedCourse` stands in for a grades module and is filled by hand in `/admin/`.
 - Courses the student never took (rather than failed) are not retakes, and failed electives are not retakes.
 - No advisor decision deadline and no notifications.
-- Removed items are deleted, not kept as history.
+- Removed items are deleted, not kept as history; only the last approved version is remembered (`approved_items`). If a HEAD deletes a section that was dropped during add-drop, it disappears from that pending schedule too.
 - The plan is checked when the student submits, not again when the advisor approves.
