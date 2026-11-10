@@ -7,11 +7,18 @@ still making during add-drop does not move them until the advisor approves it.
 Weights: a section's components never add up to more than 100%. Publishing needs
 exactly 100%, and once anything is published the total must stay at 100%.
 
+Course average: each graded component counts as score / max_score * 100, weighted by
+its share of the course grade. Components without a grade are left out, so the
+average describes the graded part (graded_weight) until every component is graded.
+Students only see, and only average, published components.
+
 Every component or grade write locks the section row first, so the weight total,
 publication state and maximum scores cannot change under a concurrent write.
 """
 
-from decimal import Decimal
+import csv
+import io
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 from django.db import transaction
 from django.db.models import Max
@@ -25,6 +32,8 @@ from courses.models import Section
 from .models import Grade, GradingComponent
 
 FULL_WEIGHT = Decimal("100")
+TWO_PLACES = Decimal("0.01")
+MAX_CSV_BYTES = 1_000_000
 
 
 class GradingConflict(APIException):
@@ -41,6 +50,14 @@ def graded_students(section):
         term_id=section.term_id, approved_items__contains=[{"section": section.pk}],
     ).values("student_id")
     return User.objects.filter(pk__in=student_ids, role=User.Role.STUDENT).order_by("student_no", "email")
+
+
+def student_section_ids(student):
+    """Sections on the student's approved registration forms, in every term."""
+    ids = set()
+    for items in Registration.objects.filter(student=student).values_list("approved_items", flat=True):
+        ids.update(row["section"] for row in items)
+    return ids
 
 
 def weight_total(section, exclude=None):
@@ -155,3 +172,99 @@ def set_published(component, publish):
 
 def missing_grades(component):
     return graded_students(component.section).exclude(grades__component=component).count()
+
+
+def course_average(rows):
+    """rows: (weight, score or None, max_score) per component.
+
+    Returns the weighted average of the graded components (out of 100), the weight
+    they cover, and the points already earned toward the course grade.
+    """
+    graded = [(weight, score * FULL_WEIGHT / max_score) for weight, score, max_score in rows if score is not None]
+    graded_weight = sum((weight for weight, _ in graded), Decimal("0"))
+    earned = sum((weight * percent / FULL_WEIGHT for weight, percent in graded), Decimal("0"))
+    average = None
+    if graded_weight:
+        average = (sum(weight * percent for weight, percent in graded) / graded_weight).quantize(
+            TWO_PLACES, rounding=ROUND_HALF_UP,
+        )
+    return {
+        "average": average,
+        "graded_weight": graded_weight.quantize(TWO_PLACES),
+        "earned": earned.quantize(TWO_PLACES, rounding=ROUND_HALF_UP),
+    }
+
+
+def parse_grade_csv(upload, section):
+    """Read a CSV of student_no and score into save_grades rows.
+
+    Accepts ',' ';' or tab separated files (Excel in Turkish saves with ';') and a
+    decimal comma. Rows with an empty score are skipped, so a partly filled template
+    only changes the scores it contains. Returns (rows, line numbers of the rows).
+    """
+    if upload.size > MAX_CSV_BYTES:
+        raise ValidationError({"file": ["The file is larger than 1 MB."]})
+    try:
+        text = upload.read().decode("utf-8-sig")
+    except UnicodeDecodeError:
+        raise ValidationError({"file": ["Save the file as UTF-8 CSV."]})
+    first_line = text.split("\n", 1)[0]
+    delimiter = ";" if ";" in first_line else "\t" if "\t" in first_line else ","
+    reader = csv.DictReader(io.StringIO(text), delimiter=delimiter)
+    if not reader.fieldnames:
+        raise ValidationError({"file": ["The file is empty."]})
+    reader.fieldnames = [name.strip().lower() for name in reader.fieldnames]
+    if not {"student_no", "score"} <= set(reader.fieldnames):
+        raise ValidationError({"file": ["The first row must name the columns student_no and score."]})
+
+    by_number = {
+        student.student_no: student.pk
+        for student in graded_students(section)
+        if student.student_no
+    }
+    rows, lines, errors = [], [], {}
+    for line, record in enumerate(reader, start=2):
+        number = (record.get("student_no") or "").strip()
+        raw = (record.get("score") or "").strip()
+        if not raw:
+            continue
+        if number not in by_number:
+            errors[str(line)] = ["This student number is not on the section's approved roster."]
+            continue
+        try:
+            score = Decimal(raw.replace(",", "."))
+        except InvalidOperation:
+            errors[str(line)] = ["Enter a number."]
+            continue
+        if not score.is_finite() or score < 0 or score.as_tuple().exponent < -2:
+            errors[str(line)] = ["Enter a score of zero or more, with at most two decimals."]
+            continue
+        rows.append({"student": by_number[number], "score": score})
+        lines.append(line)
+    if len(rows) > 1000:
+        raise ValidationError({"file": ["Import at most 1000 rows at a time."]})
+    if errors:
+        raise ValidationError({"file": errors})
+    if not rows:
+        raise ValidationError({"file": ["The file has no scores."]})
+    return rows, lines
+
+
+def import_grades(component, upload, entered_by):
+    rows, lines = parse_grade_csv(upload, component.section)
+    try:
+        return save_grades(component, rows, entered_by)
+    except ValidationError as error:
+        # Point batch errors at the file's line numbers instead of list positions.
+        problems = error.detail.get("grades") if isinstance(error.detail, dict) else None
+        if not isinstance(problems, dict):
+            raise
+        raise ValidationError({"file": {str(lines[int(index)]): messages for index, messages in problems.items()}})
+
+
+def grade_template_rows(component):
+    """The roster with current scores, for filling in and importing again."""
+    scores = dict(component.grades.values_list("student_id", "score"))
+    for student in graded_students(component.section):
+        score = scores.get(student.pk)
+        yield [student.student_no or "", student.first_name, student.last_name, "" if score is None else f"{score:.2f}"]
