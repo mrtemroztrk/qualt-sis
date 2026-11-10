@@ -2374,7 +2374,10 @@ pages.library = async parent => {
   );
 };
 
-const outcomeFields = () => [
+const outcomeFields = (outcome = {}) => [
+  ...(is('ADMIN') && !outcome.department ? [choice(
+    'department', 'Department', departmentOptions(), { numeric: true }
+  )] : []),
   F('code', 'Code', 'text', {
     max: 16,
     help: 'For example, PO1 or PO12.'
@@ -2386,6 +2389,8 @@ const outcomeFields = () => [
 ];
 
 pages.outcomes = async parent => {
+  if (is('ADMIN')) departments = await all('/api/departments/');
+
   heading(
     parent,
     'Program outcomes',
@@ -2409,6 +2414,7 @@ pages.outcomes = async parent => {
   await paged(parent, '/api/program-outcomes/', (list, outcome) => {
     const section = card(list, `${outcome.code} · ${outcome.title}`);
 
+    text(section, outcome.department_name || 'Awaiting department assignment', 'muted');
     text(section, outcome.description, 'copy');
 
     if (!outcome.is_active) add(section, badge('Inactive'));
@@ -2416,7 +2422,7 @@ pages.outcomes = async parent => {
     if (is('HEAD', 'ADMIN')) {
       button(section, 'Edit', () => editor(
         'Edit program outcome',
-        outcomeFields(),
+        outcomeFields(outcome),
         outcome,
         values => request(
           `/api/program-outcomes/${outcome.id}/`,

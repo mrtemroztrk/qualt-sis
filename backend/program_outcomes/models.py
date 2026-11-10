@@ -3,11 +3,16 @@ from django.db import models
 
 
 class ProgramOutcome(models.Model):
-    """An expected graduate skill for the pilot Computer Engineering program."""
+    """An expected graduate skill belonging to one existing department."""
+
+    # Null is reserved for legacy outcomes awaiting ADMIN assignment.
+    department = models.ForeignKey(
+        "departments.Department", on_delete=models.PROTECT,
+        related_name="program_outcomes", null=True, blank=True,
+    )
 
     code = models.CharField(
         max_length=16,
-        unique=True,
         validators=[
             RegexValidator(
                 regex=r"\APO[1-9][0-9]*\Z",
@@ -26,8 +31,12 @@ class ProgramOutcome(models.Model):
     updated_at = models.DateTimeField(auto_now=True)
 
     class Meta:
-        ordering = ["display_order", "code"]
+        ordering = ["department__code", "display_order", "code"]
         constraints = [
+            models.UniqueConstraint(
+                fields=["department", "code"], nulls_distinct=False,
+                name="unique_outcome_code_per_department",
+            ),
             models.CheckConstraint(
                 condition=models.Q(display_order__gte=1),
                 name="program_outcome_order_at_least_one",
