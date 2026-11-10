@@ -1,7 +1,9 @@
 from django.contrib import admin
 from django.urls import path, include
+from .views import campus_index
 
 urlpatterns = [
+    path("", campus_index, name="campus_index"),
     path("admin/", admin.site.urls),
     path("api/auth/", include("accounts.urls")),
     path("api/program-outcomes/", include("program_outcomes.urls")),

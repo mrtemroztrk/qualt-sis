@@ -18,10 +18,12 @@ services:
     environment:
       DB_HOST: db
       DB_PORT: 5432
+      FRONTEND_INDEX_PATH: /frontend/index.html
     ports:
-      - "8000:8000"
+      - "${WEB_PORT:-8000}:8000"
     volumes:
       - .:/app
+      - ../index.html:/frontend/index.html:ro
     depends_on:
       - db
 
