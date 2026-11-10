@@ -9,3 +9,4 @@ Backend module guides:
 - [Student feedback: privacy, sharing consent and discussion API](backend/student_feedback/README.md)
 - [Course catalog and registration: departments, sections, advisor approval](backend/course_registration/README.md)
 - [Grades: components, grade entry, CSV import and course averages](backend/grades/README.md)
+- [Learning outcomes: LO/PO links and outcome scores](backend/learning_outcomes/README.md)
