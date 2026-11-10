@@ -9,8 +9,11 @@ timetables are unchanged.
 
 Students choose `INSTRUCTOR` (one selected instructor), `HEAD` (department heads)
 or `BOTH` when submitting feedback. Other students and unrelated instructors
-cannot read the private feedback or its replies. In this pilot there is no
-department model, so HEAD means all current HEAD accounts, not a department filter.
+cannot read the private feedback or its replies. HEAD means heads of the
+feedback's department, using Poyraz's existing `departments.Department` model.
+The department comes from the student's account at submission and is stored on
+the feedback. A later student transfer does not move the conversation or its
+approved audience. ADMIN retains university-wide audit access.
 
 `is_anonymous` defaults to true. The chosen recipients see an anonymous label and
 null student ID, including in private replies. An identified submission exposes
@@ -75,9 +78,10 @@ after submission; use replies for clarification or delete the feedback.
 ## Discussion and poll rules
 
 - If student visibility is approved, the discussion appears to **all STUDENT
-  accounts in this pilot**, not a course cohort. The original author can always
+  accounts in the feedback's department**, not a course cohort. The original author can always
   view their published discussion. Only the requesting instructor can view it
-  as INSTRUCTOR. HEAD needs the approved HEAD visibility; ADMIN always sees it.
+  as INSTRUCTOR. HEAD needs both matching department membership and the approved
+  HEAD visibility; ADMIN always sees it.
 - Students with access and the requesting instructor can comment. HEAD and ADMIN
   can read but do not post discussion comments. ADMIN can reply in private threads.
 - When student comments are hidden, a student sees only their own comments and
@@ -114,8 +118,9 @@ after submission; use replies for clarification or delete the feedback.
 
 Integration adds only an app entry to `config/settings.py`, a URL include to
 `config/urls.py`, and a README link. The existing `accounts` authentication and
-permissions are reused. There is no dependency on another feature app and no
-new Python dependency or production service.
+permissions are reused. Department membership reuses `departments.Department`
+and `accounts.User.department`; the courses and registration apps are unchanged.
+There is no new Python dependency or production service.
 
 Write services use database transactions and always lock the source Feedback
 before its SharingRequest. This prevents a concurrent publish/delete/withdrawal
@@ -136,6 +141,7 @@ JWT and completed first password change. Send JSON and `Authorization: Bearer ..
 | GET, DELETE | `items/{id}/` | Visible detail; owner STUDENT soft-deletes. |
 | GET, POST | `items/{id}/replies/` | Private replies among original recipients/author and ADMIN. |
 | POST | `items/{id}/sharing-request/` | Selected INSTRUCTOR requests sharing permission. |
+| PATCH | `items/{id}/` | ADMIN only: assign `department` to an unassigned legacy record. No content editing. |
 | GET | `sharing-requests/` | Author's or requesting instructor's requests; ADMIN sees all. |
 | GET | `sharing-requests/{id}/` | Full proposal, state and student conditions. |
 | POST | `sharing-requests/{id}/respond/` | Owner STUDENT approves, rejects or proposes conditions. |
@@ -172,6 +178,11 @@ POST to `items/` returns 201 with the item ID, those fields, `student: {id, name
 `created_at`, `deleted_at` and `admin_audit_access: true`. The student identity is
 viewer-specific; anonymous recipients receive `{id: null, name: "Anonymous student"}`.
 For HEAD-only feedback, omit `instructor` or send null. `BOTH` requires one.
+The account must have an active department. The server supplies `department`;
+a forged department in the body cannot override membership. Private feedback,
+sharing proposals and discussions return `department` and `department_name`.
+The selected instructor may belong to another department: the course catalog
+supports cross-department teaching, including university-wide electives.
 Title is required, max 200; body required, max 5000. Content is plain text.
 
 POST to `items/{id}/replies/` with `{"body":"Here is another example."}` returns
@@ -316,3 +327,42 @@ instructor, an unrelated instructor, HEAD and ADMIN. Verify anonymous private
 replies; rejection; restrictive counter-conditions; hidden results; vote changes
 and deadlines; withdrawal/deletion; and ADMIN-only audit of removed content.
 Concurrency tests use real separate PostgreSQL connections.
+
+
+## Department upgrade and frontend compatibility
+
+Migration `0002_feedback_department` preserves every feedback, reply, proposal,
+comment and vote. It copies the student's current department where known. Unknown
+memberships remain null; it never invents a department or assumes CSE.
+
+Unassigned legacy feedback remains available to its author, selected instructor
+and ADMIN. HEAD and peer students cannot see it. New sharing requests and
+publication require assignment first. An ADMIN may classify a legacy item once:
+
+```http
+PATCH /api/feedback/items/12/
+Content-Type: application/json
+Authorization: Bearer <access-token>
+
+{"department": 2}
+```
+
+The department must already exist and be active. Other fields cannot be edited
+by this PATCH, and an assigned conversation cannot be moved, including by ADMIN.
+No old record or audit trail is deleted. Existing campus-wide sharing consents
+are narrowed to the recorded department during upgrade; no new audience is added.
+
+Private notifications go only to the selected instructor and eligible heads of
+the recorded department. Notification list and mark-read also recheck current
+content access, so changing a head's department cannot leave old feedback IDs or
+events accessible through their inbox.
+
+The root `index.html` includes only the needed compatibility changes: department
+names on private conversations, proposals and discussions; clear department-based
+visibility labels; and an ADMIN action to assign unclassified legacy feedback.
+API paths and the original consent and anonymity rules remain available.
+General announcements and shared library rooms keep their campus-wide scope.
+
+Department isolation, student transfers, legacy assignment, nested comments/votes,
+notification access and migration preservation are covered in `tests/test_departments.py`
+and `tests/test_migrations.py`, alongside the original consent/JWT/concurrency tests.

@@ -1,7 +1,7 @@
 from django.db import transaction
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
-from rest_framework.exceptions import APIException, NotFound, PermissionDenied
+from rest_framework.exceptions import APIException, NotFound, PermissionDenied, ValidationError
 
 from .access import CONDITION_FIELDS, feedback_for, proposed_conditions, requests_for
 from .models import Feedback, SharingRequest
@@ -29,6 +29,8 @@ def request_sharing(feedback_id, instructor, data):
         raise NotFound()
     if instructor.role != "INSTRUCTOR" or feedback.instructor_id != instructor.pk:
         raise PermissionDenied("Only the selected instructor can request sharing.")
+    if feedback.department_id is None:
+        raise ValidationError({"department": "ADMIN must assign this legacy feedback to a department before sharing."})
     if SharingRequest.objects.filter(feedback=feedback).exists():
         raise FeedbackConflict("A sharing request already exists for this feedback.")
     proposal = SharingRequest.objects.create(feedback=feedback, instructor=instructor, **data)
@@ -62,6 +64,8 @@ def publish_sharing(pk, instructor):
         raise PermissionDenied("Only the requesting instructor can publish.")
     if proposal.state not in ["APPROVED", "COUNTERED"]:
         raise FeedbackConflict("The student must approve or propose conditions before publication.")
+    if proposal.feedback.department_id is None:
+        raise ValidationError({"department": "ADMIN must assign this legacy feedback to a department before publication."})
     # Never accept visibility settings from the publish request itself.
     for field in CONDITION_FIELDS:
         setattr(proposal, field, proposal.student_conditions[field])

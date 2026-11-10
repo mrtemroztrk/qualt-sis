@@ -2531,6 +2531,16 @@ async function feedbackDetail(id) {
   const parent = modal('Private conversation');
   const feedback = await request(`/api/feedback/items/${id}/`);
 
+  text(parent, feedback.department_name || 'Awaiting department assignment', 'notice');
+  if (is('ADMIN') && !feedback.department) {
+    button(parent, 'Assign department', async () => {
+      departments = await all('/api/departments/');
+      editor('Assign legacy feedback', [choice(
+        'department', 'Department', departmentOptions(), { numeric: true }
+      )], {}, values => request(`/api/feedback/items/${id}/`, 'PATCH', values));
+    });
+  }
+
   add(parent, node('h3', '', feedback.title));
   text(parent, feedback.body, 'copy');
 
@@ -2604,8 +2614,8 @@ async function feedbackDetail(id) {
 }
 
 const conditions = [
-  ['visible_to_students', 'Visible to all students'],
-  ['visible_to_heads', 'Visible to department heads'],
+  ['visible_to_students', 'Visible to students in this department'],
+  ['visible_to_heads', 'Visible to heads of this department'],
   ['reveal_identity', 'Reveal the original student’s identity'],
   ['show_results_to_students', 'Show poll results to students'],
   [
@@ -2697,6 +2707,7 @@ pages.sharing = async parent => {
 async function sharingDetail(id) {
   const parent = modal('Sharing proposal');
   const proposal = await request(`/api/feedback/sharing-requests/${id}/`);
+  text(parent, proposal.department_name || 'Awaiting department assignment', 'notice');
 
   add(
     parent,
@@ -2867,6 +2878,7 @@ pages.discussions = async parent => {
 async function discussionDetail(id) {
   const parent = modal('Discussion');
   const discussion = await request(`/api/feedback/discussions/${id}/`);
+  text(parent, discussion.department_name || 'Awaiting department assignment', 'notice');
 
   add(parent, node('h3', '', discussion.title));
   text(parent, discussion.instructor.name, 'muted');

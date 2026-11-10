@@ -9,8 +9,8 @@ from accounts.permissions import IsStudent, PasswordChanged
 from .access import feedback_for
 from .models import PrivateReply
 from .pagination import FeedbackPagination
-from .serializers import FeedbackSerializer, InstructorSerializer, PrivateReplySerializer
-from .services import delete_feedback, reply_privately, submit_feedback
+from .serializers import FeedbackSerializer, InstructorSerializer, LegacyDepartmentSerializer, PrivateReplySerializer
+from .services import assign_legacy_department, delete_feedback, reply_privately, submit_feedback
 
 
 class InstructorListView(generics.ListAPIView):
@@ -43,6 +43,14 @@ class FeedbackDetailView(generics.RetrieveAPIView):
 
     def get_queryset(self):
         return feedback_for(self.request.user)
+
+    def patch(self, request, pk):
+        if request.user.role != User.Role.ADMIN:
+            raise PermissionDenied("Only ADMIN can assign legacy feedback to a department.")
+        payload = LegacyDepartmentSerializer(data=request.data)
+        payload.is_valid(raise_exception=True)
+        feedback = assign_legacy_department(pk, request.user, payload.validated_data["department"])
+        return Response(self.get_serializer(feedback).data)
 
     def delete(self, request, pk):
         if request.user.role != User.Role.STUDENT:

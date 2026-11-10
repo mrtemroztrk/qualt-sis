@@ -9,6 +9,12 @@ class Feedback(models.Model):
         BOTH = "BOTH", "Selected instructor and department heads"
 
     student = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="submitted_feedback")
+    # Keep the original audience stable if the student's department later changes.
+    # Null is reserved for legacy feedback awaiting ADMIN assignment.
+    department = models.ForeignKey(
+        "departments.Department", on_delete=models.PROTECT,
+        related_name="feedback_items", null=True, blank=True,
+    )
     instructor = models.ForeignKey(
         settings.AUTH_USER_MODEL, on_delete=models.PROTECT, related_name="received_feedback", null=True, blank=True,
     )

@@ -5,13 +5,12 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 
 from accounts.permissions import IsInstructor, IsStudent, PasswordChanged
-from .access import requests_for
+from .access import notifications_for, requests_for
 from .consent_serializers import (
     ConsentResponseSerializer, NotificationQuerySerializer, NotificationSerializer, PublishSerializer,
     SharingCreateSerializer, SharingRequestSerializer,
 )
 from .consent_services import publish_sharing, request_sharing, respond_to_sharing, withdraw_sharing
-from .models import FeedbackNotification
 from .pagination import FeedbackPagination
 
 
@@ -79,7 +78,7 @@ class NotificationListView(generics.ListAPIView):
         # Query parameters are not HTML checkboxes: absence means no filter.
         query = NotificationQuerySerializer(data=self.request.query_params.dict())
         query.is_valid(raise_exception=True)
-        rows = FeedbackNotification.objects.filter(recipient=self.request.user)
+        rows = notifications_for(self.request.user)
         if "unread" in query.validated_data:
             rows = rows.filter(is_read=not query.validated_data["unread"])
         return rows
@@ -89,7 +88,9 @@ class NotificationReadView(APIView):
     permission_classes = [IsAuthenticated, PasswordChanged]
 
     def post(self, request, pk):
-        row = get_object_or_404(FeedbackNotification, pk=pk, recipient=request.user)
+        row = get_object_or_404(
+            notifications_for(request.user), pk=pk,
+        )
         row.is_read = True
         row.save(update_fields=["is_read"])
         return Response(NotificationSerializer(row).data)
