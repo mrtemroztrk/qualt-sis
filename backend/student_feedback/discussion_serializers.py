@@ -7,6 +7,8 @@ from .models import DiscussionComment, PollVote, SharingRequest
 
 
 class DiscussionSerializer(serializers.ModelSerializer):
+    department = serializers.IntegerField(source="feedback.department_id", read_only=True, allow_null=True)
+    department_name = serializers.CharField(source="feedback.department.name", read_only=True, default=None)
     title = serializers.CharField(source="feedback.title", read_only=True)
     original_feedback = serializers.CharField(source="feedback.body", read_only=True)
     student = serializers.SerializerMethodField()
@@ -17,7 +19,7 @@ class DiscussionSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = SharingRequest
-        fields = ["id", "title", "original_feedback", "student", "instructor", "introduction",
+        fields = ["id", "department", "department_name", "title", "original_feedback", "student", "instructor", "introduction",
                   "state", "conditions", "poll", "published_at", "admin_audit_access"]
         read_only_fields = fields
 

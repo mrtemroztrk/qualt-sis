@@ -1,4 +1,5 @@
 from rest_framework import serializers
+from departments.models import Department
 
 from accounts.models import User
 from .access import author_identity
@@ -14,17 +15,19 @@ class InstructorSerializer(serializers.ModelSerializer):
 
 
 class FeedbackSerializer(serializers.ModelSerializer):
+    department = serializers.PrimaryKeyRelatedField(read_only=True)
+    department_name = serializers.CharField(source="department.name", read_only=True, default=None)
     student = serializers.SerializerMethodField()
     is_anonymous = serializers.BooleanField(required=False, default=True)
     admin_audit_access = serializers.BooleanField(read_only=True, default=True)
     instructor = serializers.PrimaryKeyRelatedField(
-        queryset=User.objects.filter(role=User.Role.INSTRUCTOR, is_active=True),
+        queryset=User.objects.filter(role__in=User.ADVISOR_ROLES, is_active=True),
         required=False, allow_null=True,
     )
 
     class Meta:
         model = Feedback
-        fields = ["id", "student", "instructor", "audience", "is_anonymous", "title", "body", "created_at", "deleted_at", "admin_audit_access"]
+        fields = ["id", "student", "department", "department_name", "instructor", "audience", "is_anonymous", "title", "body", "created_at", "deleted_at", "admin_audit_access"]
         read_only_fields = ["id", "student", "created_at", "deleted_at"]
 
     def get_student(self, feedback):
@@ -36,6 +39,17 @@ class FeedbackSerializer(serializers.ModelSerializer):
                 raise serializers.ValidationError({"instructor": "Do not select an instructor for HEAD-only feedback."})
         elif not attrs.get("instructor"):
             raise serializers.ValidationError({"instructor": "Select the instructor who should receive this feedback."})
+        return attrs
+
+
+class LegacyDepartmentSerializer(serializers.Serializer):
+    """ADMIN can classify preserved feedback that has no department yet."""
+
+    department = serializers.PrimaryKeyRelatedField(queryset=Department.objects.filter(is_active=True))
+
+    def validate(self, attrs):
+        if set(self.initial_data) != {"department"}:
+            raise serializers.ValidationError("Only the legacy department assignment can be changed.")
         return attrs
 
 

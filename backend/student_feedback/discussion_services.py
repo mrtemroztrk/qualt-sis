@@ -2,6 +2,7 @@ from django.db import transaction
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
 from rest_framework.exceptions import NotFound, PermissionDenied, ValidationError
+from accounts.models import User
 
 from .access import discussions_for
 from .consent_services import FeedbackConflict
@@ -21,7 +22,7 @@ def lock_discussion(pk, actor):
 @transaction.atomic
 def add_comment(pk, actor, body):
     discussion = lock_discussion(pk, actor)
-    if not (actor.role == "STUDENT" or (actor.role == "INSTRUCTOR" and actor.pk == discussion.instructor_id)):
+    if not (actor.role == "STUDENT" or (actor.role in User.ADVISOR_ROLES and actor.pk == discussion.instructor_id)):
         raise PermissionDenied("Only students and the requesting instructor can comment.")
     comment = DiscussionComment.objects.create(discussion=discussion, author=actor, body=body)
     if actor.pk != discussion.instructor_id:

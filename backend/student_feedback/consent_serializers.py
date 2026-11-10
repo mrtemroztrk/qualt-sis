@@ -69,6 +69,8 @@ class PublishSerializer(serializers.Serializer):
 
 
 class SharingRequestSerializer(serializers.ModelSerializer):
+    department = serializers.IntegerField(source="feedback.department_id", read_only=True, allow_null=True)
+    department_name = serializers.CharField(source="feedback.department.name", read_only=True, default=None)
     student = serializers.SerializerMethodField()
     feedback_title = serializers.CharField(source="feedback.title", read_only=True)
     feedback_body = serializers.CharField(source="feedback.body", read_only=True)
@@ -78,7 +80,7 @@ class SharingRequestSerializer(serializers.ModelSerializer):
     class Meta:
         model = SharingRequest
         fields = [
-            "id", "feedback", "student", "instructor", "feedback_title", "feedback_body",
+            "id", "feedback", "department", "department_name", "student", "instructor", "feedback_title", "feedback_body",
             "introduction", "state", "conditions", "student_conditions", "poll_question",
             "poll_options", "poll_closes_at", "created_at", "responded_at", "published_at", "admin_audit_access",
         ]

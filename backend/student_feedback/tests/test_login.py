@@ -1,14 +1,16 @@
 from rest_framework.test import APITestCase
 
 from accounts.models import User
+from departments.models import Department
 from student_feedback.models import Feedback
 
 
 class FeedbackLoginTests(APITestCase):
     def setUp(self):
+        self.department = Department.objects.create(code="CSE", name="Computer Engineering")
         self.password = "Initial-Feedback-482!"
-        self.student = User.objects.create_user(username="student", email="student@example.test", password=self.password)
-        self.teacher = User.objects.create_user(username="teacher", email="teacher@example.test", role="INSTRUCTOR")
+        self.student = User.objects.create_user(username="student", email="student@example.test", department=self.department, password=self.password)
+        self.teacher = User.objects.create_user(username="teacher", email="teacher@example.test", department=self.department, role="INSTRUCTOR")
 
     def login(self):
         response = self.client.post("/api/auth/login/", {"email": self.student.email, "password": self.password})

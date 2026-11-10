@@ -1,17 +1,19 @@
 from rest_framework.test import APITestCase
 
 from accounts.models import User
+from departments.models import Department
 from student_feedback.models import Feedback
 
 
 class PrivateFeedbackTests(APITestCase):
     def setUp(self):
+        self.department = Department.objects.create(code="CSE", name="Computer Engineering")
         self.users = {}
         for name, role in [("student", "STUDENT"), ("other", "STUDENT"), ("teacher", "INSTRUCTOR"),
                            ("other_teacher", "INSTRUCTOR"), ("head", "HEAD"), ("admin", "ADMIN")]:
             self.users[name] = User.objects.create_user(
                 username=name, email=f"{name}@example.test", first_name=name,
-                role=role, must_change_password=False,
+                role=role, department=self.department if role != "ADMIN" else None, must_change_password=False,
             )
         self.client.force_authenticate(self.users["student"])
 
@@ -76,5 +78,5 @@ class PrivateFeedbackTests(APITestCase):
 
     def test_directory_exposes_names_but_no_account_emails(self):
         response = self.client.get("/api/feedback/instructors/")
-        self.assertEqual(response.data["count"], 2)
+        self.assertEqual(response.data["count"], 3)
         self.assertNotIn("email", response.content.decode())

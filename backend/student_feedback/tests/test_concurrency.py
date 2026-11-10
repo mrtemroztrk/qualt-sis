@@ -6,14 +6,16 @@ from django.test import TransactionTestCase
 from rest_framework.test import APIClient
 
 from accounts.models import User
+from departments.models import Department
 from student_feedback.models import Feedback, SharingRequest
 
 
 class ConsentConcurrencyTests(TransactionTestCase):
     def setUp(self):
-        self.student = User.objects.create_user(username="student", email="student@example.test", must_change_password=False)
-        self.teacher = User.objects.create_user(username="teacher", email="teacher@example.test", role="INSTRUCTOR", must_change_password=False)
-        self.feedback = Feedback.objects.create(student=self.student, instructor=self.teacher, audience="INSTRUCTOR", title="Title", body="Body")
+        self.department = Department.objects.create(code="CSE", name="Computer Engineering")
+        self.student = User.objects.create_user(username="student", email="student@example.test", department=self.department, must_change_password=False)
+        self.teacher = User.objects.create_user(username="teacher", email="teacher@example.test", department=self.department, role="INSTRUCTOR", must_change_password=False)
+        self.feedback = Feedback.objects.create(student=self.student, department=self.department, instructor=self.teacher, audience="INSTRUCTOR", title="Title", body="Body")
         self.conditions = {
             "visible_to_students": True, "visible_to_heads": False, "reveal_identity": False,
             "show_results_to_students": False, "show_comments_to_students": False,

@@ -1,7 +1,8 @@
 from django.db import transaction
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
-from rest_framework.exceptions import APIException, NotFound, PermissionDenied
+from rest_framework.exceptions import APIException, NotFound, PermissionDenied, ValidationError
+from accounts.models import User
 
 from .access import CONDITION_FIELDS, feedback_for, proposed_conditions, requests_for
 from .models import Feedback, SharingRequest
@@ -27,8 +28,10 @@ def request_sharing(feedback_id, instructor, data):
     feedback = Feedback.objects.select_for_update().get(pk=visible.pk)
     if feedback.deleted_at:
         raise NotFound()
-    if instructor.role != "INSTRUCTOR" or feedback.instructor_id != instructor.pk:
+    if instructor.role not in User.ADVISOR_ROLES or feedback.instructor_id != instructor.pk:
         raise PermissionDenied("Only the selected instructor can request sharing.")
+    if feedback.department_id is None:
+        raise ValidationError({"department": "ADMIN must assign this legacy feedback to a department before sharing."})
     if SharingRequest.objects.filter(feedback=feedback).exists():
         raise FeedbackConflict("A sharing request already exists for this feedback.")
     proposal = SharingRequest.objects.create(feedback=feedback, instructor=instructor, **data)
@@ -58,10 +61,12 @@ def respond_to_sharing(pk, student, data):
 @transaction.atomic
 def publish_sharing(pk, instructor):
     proposal = lock_request(pk, instructor)
-    if instructor.role != "INSTRUCTOR" or proposal.instructor_id != instructor.pk:
+    if instructor.role not in User.ADVISOR_ROLES or proposal.instructor_id != instructor.pk:
         raise PermissionDenied("Only the requesting instructor can publish.")
     if proposal.state not in ["APPROVED", "COUNTERED"]:
         raise FeedbackConflict("The student must approve or propose conditions before publication.")
+    if proposal.feedback.department_id is None:
+        raise ValidationError({"department": "ADMIN must assign this legacy feedback to a department before publication."})
     # Never accept visibility settings from the publish request itself.
     for field in CONDITION_FIELDS:
         setattr(proposal, field, proposal.student_conditions[field])
@@ -76,7 +81,7 @@ def publish_sharing(pk, instructor):
 def withdraw_sharing(pk, actor):
     proposal = lock_request(pk, actor)
     if not ((actor.role == "STUDENT" and proposal.feedback.student_id == actor.pk)
-            or (actor.role == "INSTRUCTOR" and proposal.instructor_id == actor.pk)):
+            or (actor.role in User.ADVISOR_ROLES and proposal.instructor_id == actor.pk)):
         raise PermissionDenied("Only the student or requesting instructor can withdraw sharing.")
     if proposal.state == "WITHDRAWN":
         return proposal
