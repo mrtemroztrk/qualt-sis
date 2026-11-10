@@ -18,6 +18,7 @@ from datetime import timedelta
 load_dotenv()
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
+FRONTEND_INDEX_PATH = Path(os.getenv("FRONTEND_INDEX_PATH", BASE_DIR.parent / "index.html"))
 
 
 # Quick-start development settings - unsuitable for production

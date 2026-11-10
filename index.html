@@ -461,7 +461,7 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
 <script>
 'use strict';
 
-const BACKEND_ORIGIN = "http://localhost:8001";
+const BACKEND_ORIGIN = window.QUALT_API_ORIGIN || '';
 const API = BACKEND_ORIGIN.replace(/\/+$/, '');
 const UNAVAILABLE =
   'This action is currently unavailable. Please try again later.';
