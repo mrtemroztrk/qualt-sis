@@ -21,9 +21,10 @@ def feedback_for(user):
     if user.role == User.Role.INSTRUCTOR:
         return rows.filter(instructor=user, audience__in=["INSTRUCTOR", "BOTH"])
     if user.role == User.Role.HEAD:
-        if user.department_id is None:
-            return rows.none()
-        return rows.filter(audience__in=["HEAD", "BOTH"], department_id=user.department_id)
+        selected = Q(instructor=user, audience__in=["INSTRUCTOR", "BOTH"])
+        if user.department_id is not None:
+            selected |= Q(audience__in=["HEAD", "BOTH"], department_id=user.department_id)
+        return rows.filter(selected)
     return rows.none()
 
 
@@ -34,7 +35,7 @@ def requests_for(user):
     rows = rows.filter(feedback__deleted_at__isnull=True)
     if user.role == User.Role.STUDENT:
         return rows.filter(feedback__student=user)
-    if user.role == User.Role.INSTRUCTOR:
+    if user.role in User.ADVISOR_ROLES:
         return rows.filter(instructor=user)
     return rows.none()
 
@@ -52,9 +53,10 @@ def discussions_for(user):
     if user.role == User.Role.INSTRUCTOR:
         return rows.filter(instructor=user)
     if user.role == User.Role.HEAD:
-        if user.department_id is None:
-            return rows.none()
-        return rows.filter(visible_to_heads=True, feedback__department_id=user.department_id)
+        selected = Q(instructor=user)
+        if user.department_id is not None:
+            selected |= Q(visible_to_heads=True, feedback__department_id=user.department_id)
+        return rows.filter(selected)
     return rows.none()
 
 
@@ -79,5 +81,5 @@ def proposed_conditions(sharing_request):
 
 def manages_discussion(user, discussion):
     return user.role == User.Role.ADMIN or (
-        user.role == User.Role.INSTRUCTOR and user.pk == discussion.instructor_id
+        user.role in User.ADVISOR_ROLES and user.pk == discussion.instructor_id
     )

@@ -4,7 +4,8 @@ from rest_framework.permissions import IsAuthenticated
 from rest_framework.response import Response
 from rest_framework.views import APIView
 
-from accounts.permissions import IsInstructor, IsStudent, PasswordChanged
+from accounts.permissions import IsStudent, PasswordChanged
+from .permissions import IsFeedbackInstructor
 from .access import notifications_for, requests_for
 from .consent_serializers import (
     ConsentResponseSerializer, NotificationQuerySerializer, NotificationSerializer, PublishSerializer,
@@ -15,7 +16,7 @@ from .pagination import FeedbackPagination
 
 
 class SharingCreateView(APIView):
-    permission_classes = [IsAuthenticated, IsInstructor]
+    permission_classes = [IsAuthenticated, IsFeedbackInstructor]
 
     def post(self, request, pk):
         payload = SharingCreateSerializer(data=request.data)
@@ -52,7 +53,7 @@ class ConsentResponseView(APIView):
 
 
 class PublishView(APIView):
-    permission_classes = [IsAuthenticated, IsInstructor]
+    permission_classes = [IsAuthenticated, IsFeedbackInstructor]
 
     def post(self, request, pk):
         payload = PublishSerializer(data=request.data)

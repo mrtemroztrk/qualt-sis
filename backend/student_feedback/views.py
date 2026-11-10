@@ -17,7 +17,7 @@ class InstructorListView(generics.ListAPIView):
     permission_classes = [IsAuthenticated, IsStudent]
     serializer_class = InstructorSerializer
     pagination_class = FeedbackPagination
-    queryset = User.objects.filter(role="INSTRUCTOR", is_active=True).order_by("first_name", "last_name", "id")
+    queryset = User.objects.filter(role__in=User.ADVISOR_ROLES, is_active=True).order_by("first_name", "last_name", "id")
 
 
 class FeedbackListView(generics.ListCreateAPIView):

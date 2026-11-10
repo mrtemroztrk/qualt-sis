@@ -82,8 +82,8 @@ after submission; use replies for clarification or delete the feedback.
   view their published discussion. Only the requesting instructor can view it
   as INSTRUCTOR. HEAD needs both matching department membership and the approved
   HEAD visibility; ADMIN always sees it.
-- Students with access and the requesting instructor can comment. HEAD and ADMIN
-  can read but do not post discussion comments. ADMIN can reply in private threads.
+- Students with access and the requesting instructor can comment. A HEAD with only department visibility and ADMIN
+  can read but do not post discussion comments. A selected teaching HEAD can comment as the instructor. ADMIN can reply in private threads.
 - When student comments are hidden, a student sees only their own comments and
   the instructor's comments. The instructor and authorized HEAD/ADMIN see all.
 - The original author's identity remains hidden in shared comments and their
@@ -366,3 +366,14 @@ General announcements and shared library rooms keep their campus-wide scope.
 Department isolation, student transfers, legacy assignment, nested comments/votes,
 notification access and migration preservation are covered in `tests/test_departments.py`
 and `tests/test_migrations.py`, alongside the original consent/JWT/concurrency tests.
+
+
+## Department heads who also teach
+
+The course catalog accepts both INSTRUCTOR and HEAD as teaching staff. The same
+accounts can be selected as feedback recipients. A selected HEAD can use the
+instructor sharing/comment/results workflow for their own feedback, even when
+teaching an elective outside their department. Being HEAD alone never grants
+access to another instructor's private feedback or sharing requests. A head who
+only has department visibility remains a reader of shared discussions, not their
+publisher. This uses `User.ADVISOR_ROLES`; no new account role is added.

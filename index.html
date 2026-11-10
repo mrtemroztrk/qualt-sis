@@ -1373,9 +1373,7 @@ function buildNav() {
     ['feedback', 'Private feedback']
   );
 
-  if (!is('HEAD')) {
-    items.push(['sharing', 'Sharing permissions']);
-  }
+  items.push(['sharing', 'Sharing permissions']);
 
   items.push(
     ['discussions', 'Discussions'],
@@ -2603,7 +2601,7 @@ async function feedbackDetail(id) {
       );
     }
 
-    if (is('INSTRUCTOR') && feedback.instructor === session.user.id) {
+    if (is('INSTRUCTOR', 'HEAD') && feedback.instructor === session.user.id) {
       button(
         actions,
         'Request sharing permission',
@@ -2796,7 +2794,7 @@ async function sharingDetail(id) {
   }
 
   if (
-    is('INSTRUCTOR') &&
+    is('INSTRUCTOR', 'HEAD') &&
     proposal.instructor === session.user.id &&
     ['APPROVED', 'COUNTERED'].includes(proposal.state)
   ) {
@@ -2819,7 +2817,7 @@ async function sharingDetail(id) {
   if (
     (
       is('STUDENT') && proposal.student.id === session.user.id ||
-      is('INSTRUCTOR') && proposal.instructor === session.user.id
+      is('INSTRUCTOR', 'HEAD') && proposal.instructor === session.user.id
     ) &&
     ['PENDING', 'APPROVED', 'COUNTERED', 'PUBLISHED'].includes(proposal.state)
   ) {
@@ -2966,7 +2964,7 @@ async function discussionDetail(id) {
 
     if (
       is('ADMIN') ||
-      is('INSTRUCTOR') && discussion.instructor.id === session.user.id
+      is('INSTRUCTOR', 'HEAD') && discussion.instructor.id === session.user.id
     ) {
       button(section, 'View individual votes', async () => {
         const box = modal('Individual votes');
@@ -3008,7 +3006,7 @@ async function discussionDetail(id) {
     discussion.state === 'PUBLISHED' &&
     (
       is('STUDENT') ||
-      is('INSTRUCTOR') && discussion.instructor.id === session.user.id
+      is('INSTRUCTOR', 'HEAD') && discussion.instructor.id === session.user.id
     )
   ) {
     button(parent, 'Add comment', () => editor(

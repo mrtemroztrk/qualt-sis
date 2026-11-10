@@ -78,5 +78,5 @@ class PrivateFeedbackTests(APITestCase):
 
     def test_directory_exposes_names_but_no_account_emails(self):
         response = self.client.get("/api/feedback/instructors/")
-        self.assertEqual(response.data["count"], 2)
+        self.assertEqual(response.data["count"], 3)
         self.assertNotIn("email", response.content.decode())

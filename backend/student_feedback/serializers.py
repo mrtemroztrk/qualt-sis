@@ -21,7 +21,7 @@ class FeedbackSerializer(serializers.ModelSerializer):
     is_anonymous = serializers.BooleanField(required=False, default=True)
     admin_audit_access = serializers.BooleanField(read_only=True, default=True)
     instructor = serializers.PrimaryKeyRelatedField(
-        queryset=User.objects.filter(role=User.Role.INSTRUCTOR, is_active=True),
+        queryset=User.objects.filter(role__in=User.ADVISOR_ROLES, is_active=True),
         required=False, allow_null=True,
     )
 
