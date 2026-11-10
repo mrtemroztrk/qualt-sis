@@ -6,13 +6,16 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 
 from accounts.models import User
+from departments.models import Department
 
 from .models import ProgramOutcome
 
 
 class ProgramOutcomeModelTests(TestCase):
     def setUp(self):
+        self.department = Department.objects.create(code="CSE", name="Computer Engineering")
         self.outcome = ProgramOutcome.objects.create(
+            department=self.department,
             code="PO1",
             title="Problem solving",
             description="Identify and solve engineering problems.",
@@ -22,7 +25,7 @@ class ProgramOutcomeModelTests(TestCase):
     def test_codes_are_unique_in_the_database(self):
         with self.assertRaises(IntegrityError), transaction.atomic():
             ProgramOutcome.objects.create(
-                code="PO1", title="Duplicate", description="Another outcome."
+                department=self.department, code="PO1", title="Duplicate", description="Another outcome."
             )
 
     def test_invalid_codes_are_rejected(self):
@@ -38,7 +41,7 @@ class ProgramOutcomeModelTests(TestCase):
 
     def test_outcomes_follow_display_order(self):
         first = ProgramOutcome.objects.create(
-            code="PO2", title="Teamwork", description="Work in teams.", display_order=1
+            department=self.department, code="PO2", title="Teamwork", description="Work in teams.", display_order=1
         )
         self.assertEqual(list(ProgramOutcome.objects.all()), [first, self.outcome])
 
@@ -51,17 +54,19 @@ class ProgramOutcomeModelTests(TestCase):
 class ProgramOutcomeAPITestCase(APITestCase):
     @classmethod
     def setUpTestData(cls):
+        cls.department = Department.objects.create(code="CSE", name="Computer Engineering")
         cls.users = {
             role: User.objects.create_user(
                 username=f"{role.lower()}@example.test",
                 email=f"{role.lower()}@example.test",
                 password="Outcome-Test-482!",
-                role=role,
+                role=role, department=cls.department if role != "ADMIN" else None,
                 must_change_password=False,
             )
             for role in User.Role.values
         }
         cls.outcome = ProgramOutcome.objects.create(
+            department=cls.department,
             code="PO1",
             title="Problem solving",
             description="Identify and solve engineering problems.",
@@ -119,6 +124,7 @@ class ProgramOutcomeWriteTests(ProgramOutcomeAPITestCase):
     def setUp(self):
         super().setUp()
         self.payload = {
+            "department": self.department.pk,
             "code": "PO2",
             "title": "Teamwork",
             "description": "Work effectively in a team.",
@@ -185,7 +191,7 @@ class ProgramOutcomeWriteTests(ProgramOutcomeAPITestCase):
         self.assertIn("code", response.data)
 
     def test_editing_cannot_take_an_existing_code(self):
-        other = ProgramOutcome.objects.create(**self.payload)
+        other = ProgramOutcome.objects.create(**{**self.payload, "department": self.department})
         response = self.client.patch(
             reverse("program_outcomes:detail", args=[other.pk]),
             {"code": self.outcome.code},

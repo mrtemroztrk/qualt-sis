@@ -3,6 +3,7 @@ from rest_framework import status
 from rest_framework.test import APITestCase
 
 from accounts.models import User
+from departments.models import Department
 
 from .models import ProgramOutcome
 
@@ -11,12 +12,13 @@ class ProgramOutcomeLoginTests(APITestCase):
     """Exercise the existing login endpoints instead of bypassing authentication."""
 
     def setUp(self):
+        self.department = Department.objects.create(code="CSE", name="Computer Engineering")
         self.password = "Initial-Outcome-482!"
         self.user = User.objects.create_user(
             username="head@example.test",
             email="head@example.test",
             password=self.password,
-            role=User.Role.HEAD,
+            role=User.Role.HEAD, department=self.department,
         )
         self.list_url = reverse("program_outcomes:list")
         self.payload = {

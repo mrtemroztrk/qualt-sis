@@ -1,253 +1,110 @@
 # Program outcomes backend
 
-This module stores the expected graduate skills of the pilot Computer Engineering
-program. A department head or admin maintains the definitions. Students and
-instructors can read them.
+Each outcome belongs to an existing `departments.Department`, the same model
+used by accounts and Poyraz's course catalog. ADMIN creates departments through
+`/api/departments/`; this module never creates a department or assumes a CSE code.
+It stores outcome definitions, not grades or LO/PO score calculations.
 
-The module manages definitions, not student scores. It does not create courses,
-enter grades, build timetables or calculate LO/PO weights. Future course modules
-can reference a `ProgramOutcome` by its database `id`.
+## Access and ownership
 
-## Scope
-
-There is one shared outcome catalogue for the pilot program. There is no program
-or department field yet. Every `HEAD` and `ADMIN` account has the same write
-access. Before supporting multiple programs, add program membership and scoped
-permissions together; the current role check is not department isolation.
-
-No official PO text or demo accounts are inserted by the migration. Example
-descriptions below are illustrative, not the university's approved wording.
-
-## Where the code lives
-
-| File | Responsibility |
-| --- | --- |
-| `models.py` | Store outcome definitions and enforce unique codes. |
-| `migrations/0001_initial.py` | Create the outcome table. |
-| `serializers.py` | Define JSON fields and reuse model validation. |
-| `permissions.py` | Apply the existing password rule and restrict changes to heads/admins. |
-| `views.py` | Handle list, detail, create and partial update requests. |
-| `urls.py` | Declare this module's routes. |
-| `tests.py` | Test stored data, validation and role permissions. |
-| `test_integration.py` | Test the module through the existing JWT login flow. |
-
-Integration with Django is limited to adding `program_outcomes` to
-`config/settings.py` and including its URLs in `config/urls.py`. The existing
-`accounts` application, dependencies, frontend and Docker services are unchanged.
-There is no separate Django admin screen for this module in this version.
-
-## Access rules
-
-All requests need `Authorization: Bearer <access token>`. Use the existing
-`/api/auth/login/` endpoint to get tokens.
-
-| Account | List / detail | Create / edit / activate / deactivate |
+| Role | Read | Write |
 | --- | --- | --- |
-| `STUDENT` | Yes | No |
-| `INSTRUCTOR` | Yes | No |
-| `HEAD` | Yes | Yes |
-| `ADMIN` | Yes | Yes |
-| Anonymous or invalid token | No: 401 | No: 401 |
-| First password change still required | No: 403 | No: 403 |
+| STUDENT, INSTRUCTOR | Own department | No |
+| HEAD | Own department | Create and edit own department's outcomes |
+| ADMIN | All departments and unassigned legacy outcomes | Create, edit and assign legacy outcomes |
+| Account without a department | Empty list, 404 on detail | HEAD cannot create until assigned |
 
-The API checks the user's current database role, not a role value supplied by the
-frontend. `is_staff` and `is_superuser` do not replace the `HEAD`/`ADMIN` role check.
+Authentication and the first-password-change rule use the existing accounts app.
+Out-of-scope IDs return 404. A department query filter only narrows the caller's
+existing access; it never grants another department's records.
 
-## Endpoints
+`PO1` may exist once in each department. A PostgreSQL unique constraint enforces
+`department + code`, including the unassigned legacy group. Assigned outcomes
+cannot move to another department, so their IDs remain safe for future links.
+Use PATCH `is_active: false` to retire an outcome. DELETE and PUT are unsupported.
+Closing a department preserves its existing outcomes and their read/edit access;
+new outcomes and legacy assignments require an active department.
 
-Keep the trailing slash on each URL.
+## API
 
-| Method | URL | Success | Purpose |
-| --- | --- | --- | --- |
-| GET | `/api/program-outcomes/` | 200 | List all definitions. |
-| GET | `/api/program-outcomes/{id}/` | 200 | Read one definition. |
-| POST | `/api/program-outcomes/` | 201 | Create a definition. |
-| PATCH | `/api/program-outcomes/{id}/` | 200 | Change supplied fields only. |
+All URLs keep their trailing slash. Send the existing JWT bearer token.
 
-The list is a JSON array, not a paginated `results` object. An empty catalogue
-returns `[]`. Both active and inactive definitions are included. There are no
-query filters in this version. A current-outcomes screen can use
-`outcomes.filter(outcome => outcome.is_active)`; a management screen can show both.
-Records are ordered by `display_order`, then `code` to break ties.
+| Method | Path | Result |
+| --- | --- | --- |
+| GET | `/api/program-outcomes/` | JSON array scoped to the caller |
+| GET | `/api/program-outcomes/?department=2` | Narrow that array to a department |
+| POST | `/api/program-outcomes/` | Created outcome, 201 |
+| GET, PATCH | `/api/program-outcomes/<id>/` | Outcome, 200 |
 
-`PUT` and `DELETE` are not supported (405 for a permitted manager). Deactivate
-with `PATCH {"is_active": false}` and reactivate with `PATCH {"is_active": true}`.
-Both operations keep the same ID, including for future references from courses.
-Inactive codes remain reserved and cannot be reused for another record.
-
-## Fields
-
-| Field | Rules |
-| --- | --- |
-| `id` | Read-only integer; use it in detail URLs and future relationships. |
-| `code` | Required, unique, uppercase `PO` followed by a positive integer without leading zeros; at most 16 characters. Examples: `PO1`, `PO12`. |
-| `title` | Required, non-blank text, at most 200 characters. |
-| `description` | Required, non-blank text, at most 4000 characters. |
-| `display_order` | Integer from 1 to 32767; defaults to 1. |
-| `is_active` | Boolean; defaults to `true`. |
-| `created_at` | Read-only creation timestamp. |
-| `updated_at` | Read-only timestamp of the latest saved change. |
-
-Required fields must be supplied on POST. PATCH only validates supplied fields;
-omitting a field keeps its current value. Text can contain Unicode characters.
-
-POST example:
+A HEAD omits `department`; the server uses their account's department. Supplying
+another department is rejected. ADMIN must supply an existing active department
+on POST. Other fields keep their previous meanings and limits:
 
 ```json
 {
+  "department": 2,
   "code": "PO1",
-  "title": "Problem solving",
-  "description": "Identify and solve engineering problems.",
+  "title": "Engineering analysis",
+  "description": "Analyse engineering problems using appropriate methods.",
   "display_order": 1,
   "is_active": true
 }
 ```
 
-Example response (IDs and timestamps are assigned by the server):
+Responses include those fields, `id`, `department_name`, `created_at`, `updated_at`.
+`department` and `department_name` can be null only on preserved legacy records.
+Codes follow `PO1`, `PO2`, etc.; title is at most 200 characters, description 4000,
+and display order starts at 1. Unicode text is supported.
 
-```json
-{
-  "id": 1,
-  "code": "PO1",
-  "title": "Problem solving",
-  "description": "Identify and solve engineering problems.",
-  "display_order": 1,
-  "is_active": true,
-  "created_at": "2026-11-02T12:00:00Z",
-  "updated_at": "2026-11-02T12:00:00Z"
-}
+Errors: 400 for field validation or a duplicate code within a department, 401 for
+missing/invalid authentication, 403 for a disallowed role or incomplete first
+password change, 404 for missing/out-of-scope IDs, 405 for unsupported methods.
+Use HTTP status and field names rather than branching on English error text.
+
+## Existing records and frontend integration
+
+Migration `0002_outcome_department` preserves every existing outcome and ID. It
+does not guess which department owns old pilot data, even if CSE already exists.
+Legacy records initially have `department: null` and are visible only to ADMIN.
+An ADMIN assigns the correct department once:
+
+```http
+PATCH /api/program-outcomes/12/
+Content-Type: application/json
+Authorization: Bearer <access-token>
+
+{"department": 2}
 ```
 
-GET detail and PATCH return the same field structure. GET list returns an array
-of these objects.
+After assignment the department's members can read the same outcome ID. If that
+department already has the same code, rename the legacy code in the same PATCH
+or resolve the duplicate first. No records are automatically deleted or copied.
 
-## Errors the frontend should handle
+The root `index.html` has only a small compatibility update: ADMIN's PO form
+uses `/api/departments/` to select a department for new or legacy outcomes, and
+cards show the department name. HEAD forms continue to work without a selector.
+The existing API paths, list shape and outcome fields remain available.
 
-| Status | Meaning | Suggested UI behavior |
-| --- | --- | --- |
-| 400 | Invalid field, missing required field or duplicate code. | Show the field's error messages next to its input. |
-| 401 | Missing, invalid or expired access token. | Use the existing refresh/login flow. |
-| 403 | Password change required or role cannot write. | Finish password change or show a permission message. |
-| 404 | The requested outcome ID does not exist. | Return to the list and refresh it. |
-| 405 | The HTTP method is not supported. | Use PATCH for changes and deactivation. |
+## Code map and tests
 
-Example field error:
+| File | Purpose |
+| --- | --- |
+| `models.py`, `migrations/` | Department link, stable IDs and per-department uniqueness |
+| `access.py` | Department-scoped queries shared by list and detail |
+| `permissions.py` | Existing login/password/role rules |
+| `serializers.py` | Department assignment, code and field validation |
+| `views.py`, `urls.py` | Existing API endpoints and optional department filter |
+| `tests.py`, `test_integration.py` | Original model/API and real JWT scenarios |
+| `test_departments.py`, `test_migrations.py` | Cross-department access and safe upgrade of existing data |
 
-```json
-{"code": ["Use an outcome code such as PO1 or PO12."]}
-```
-
-Example role error:
-
-```json
-{"detail": "Only department heads and admins can change program outcomes."}
-```
-
-Do not decide access from an error's English text. Use the HTTP status and the
-current user's `role` / `must_change_password` fields. The backend remains the
-authority even if the frontend hides edit buttons.
-
-## Run and test with the existing Docker setup
-
-Run commands from `backend/`. For a fresh local checkout, copy `.env.example` to
-`.env`, fill `DB_NAME`, `DB_USER` and a local `DB_PASSWORD`, and leave `EMAIL_HOST`
-empty to use console email. Do not commit `.env`.
+Run from `backend/` using the existing Docker setup and local `.env`:
 
 ```bash
-docker compose up -d db
 docker compose run --rm web python manage.py migrate
-docker compose up -d --build web
-docker compose exec web python manage.py test program_outcomes --verbosity 2
+docker compose exec web python manage.py test program_outcomes --noinput
 docker compose exec web python manage.py makemigrations --check --dry-run
 ```
 
-On the first build, `docker compose run` builds the web image if needed. PostgreSQL
-must be ready before migration; if it is still starting, retry after it becomes
-ready. These commands use the existing `backend/docker-compose.yml` ports and
-container names. If they are already occupied by another project, use a local
-Compose override with different names and ports rather than stopping that project.
-
-The tests create a separate test database and remove it afterwards. They cover
-unique codes, ordering, valid and invalid writes, all four roles, deactivation,
-login, first password change, token refresh and revoked access. Tests do not
-populate the application's normal database.
-
-For manual API testing, use an existing HEAD/ADMIN account. In an empty local
-database only, create a test account in the Django shell:
-
-```bash
-docker compose exec web python manage.py shell
-```
-
-```python
-from getpass import getpass
-from accounts.models import User
-
-User.objects.create_user(
-    username="po-head@example.test",
-    email="po-head@example.test",
-    password=getpass("Temporary test password: "),
-    role=User.Role.HEAD,
-    must_change_password=True,
-)
-```
-
-This creates a local test user without sending email. Log in through the existing
-login screen or API and complete the required password change before testing POs.
-Use a separate STUDENT account to verify that create/update requests return 403.
-
-## Manual API requests
-
-Set `API_URL` to your running backend and copy an access token from your own
-login response. The standard Compose port is 8000; a local override may differ.
-Do not put a real password or token in a committed file.
-
-```bash
-API_URL=http://localhost:8000
-ACCESS_TOKEN='<access token from /api/auth/login/>'
-
-curl -i "$API_URL/api/program-outcomes/" \
-  -H "Authorization: Bearer $ACCESS_TOKEN"
-
-curl -i -X POST "$API_URL/api/program-outcomes/" \
-  -H "Authorization: Bearer $ACCESS_TOKEN" \
-  -H 'Content-Type: application/json' \
-  -d '{"code":"PO1","title":"Problem solving","description":"Identify and solve engineering problems.","display_order":1}'
-
-# Replace this value with the ID returned by POST.
-OUTCOME_ID=1
-
-curl -i "$API_URL/api/program-outcomes/$OUTCOME_ID/" \
-  -H "Authorization: Bearer $ACCESS_TOKEN"
-
-curl -i -X PATCH "$API_URL/api/program-outcomes/$OUTCOME_ID/" \
-  -H "Authorization: Bearer $ACCESS_TOKEN" \
-  -H 'Content-Type: application/json' \
-  -d '{"is_active":false}'
-```
-
-## Frontend handoff
-
-1. Reuse the existing login response and password-change flow.
-2. Fetch the catalogue after login; render an empty state for `[]`.
-3. Show the code, title, description and active status. Use `id` as the item key.
-4. Offer create/edit/activate/deactivate controls only to HEAD and ADMIN users.
-5. Display 400 field errors near their form fields; do not discard entered text.
-6. After POST or PATCH succeeds, reload the list so server ordering is reflected.
-
-For an authenticated request with the current frontend's session object:
-
-```javascript
-const response = await fetch(`${BACKEND_ORIGIN}/api/program-outcomes/`, {
-  headers: { Authorization: `Bearer ${session.access}` },
-});
-const data = await response.json();
-if (!response.ok) {
-  // Pass the status and error data to the screen's error handler.
-  throw new Error(`Could not load program outcomes (${response.status}).`);
-}
-const activeOutcomes = data.filter(outcome => outcome.is_active);
-```
-
-This is a request example, not a new frontend screen. The frontend team owns
-the screen and its integration with the existing `qualt:login` event.
+If the server was already running during a branch switch, restart it after
+migration. Tests use a separate PostgreSQL test database. No new Python dependency
+or container is required. The accounts, departments and course apps are reused.
