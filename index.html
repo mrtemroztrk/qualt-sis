@@ -344,6 +344,63 @@ dialog::backdrop{background:rgba(0,0,0,.45)}
 @media(prefers-reduced-motion:reduce){
   *{scroll-behavior:auto!important}
 }
+
+/* Keep the existing login layout intact while making the signed-in workspace
+   denser and easier to scan. */
+#app .content{padding:26px}
+#app .card{padding:18px;margin-bottom:12px}
+#app .grid{gap:12px}
+#app .grid>.card{padding:16px}
+#app button{min-height:38px;padding:7px 12px}
+#app .table-wrap{margin:12px 0}
+#app th,#app td{padding:9px 11px}
+#app .page-head{margin-bottom:18px}
+#app .empty{padding:20px}
+
+.nav-group{margin:0 0 14px}
+.nav-group-label{
+  padding:0 8px 6px;
+  color:var(--muted);
+  font-size:11px;
+  font-weight:700;
+  letter-spacing:1.5px;
+  text-transform:uppercase
+}
+.nav-group-items{display:grid;gap:3px}
+.nav-group-items[hidden]{display:none}
+.nav-group-toggle{
+  width:100%;
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  text-align:left;
+  border:0;
+  padding:7px 8px;
+  min-height:34px;
+  color:var(--muted);
+  background:transparent;
+  font-size:12px;
+  font-weight:700;
+  letter-spacing:.4px
+}
+.nav-group-toggle:hover{color:var(--text);border-color:transparent}
+.nav-group-toggle::after{content:"⌄";font-size:16px;line-height:1}
+.nav-group-toggle[aria-expanded=false]::after{content:"›"}
+.nav-group-items button{
+  width:100%;
+  min-height:35px;
+  padding:7px 10px 7px 14px;
+  font-size:14px
+}
+
+@media(max-width:800px){
+  #app .content{padding:20px 18px}
+  #app .nav-group{display:contents}
+  #app .nav-group-label{display:none}
+  #app .nav-group-toggle{display:none}
+  #app .nav-group-items{display:flex;overflow:auto;gap:6px}
+  #app .nav-group-items button{white-space:nowrap;flex-shrink:0}
+}
 </style>
 </head>
 
@@ -547,6 +604,10 @@ let libraryPeriod = 'upcoming';
 let notificationsUnread = false;
 let managementTab = 'courses';
 let libraryAdminTab = 'rooms';
+let gradeSectionId = '';
+let learningSectionId = '';
+let learningManagedSection = false;
+let learningCourseId = '';
 
 const is = (...roles) =>
   !!session && roles.includes(session.user.role);
@@ -641,7 +702,7 @@ async function request(
 
     const headers = { Accept: 'application/json' };
 
-    if (body !== undefined) {
+    if (body !== undefined && !(body instanceof FormData)) {
       headers['Content-Type'] = 'application/json';
     }
 
@@ -652,7 +713,11 @@ async function request(
     const response = await fetch(API + path, {
       method,
       headers,
-      body: body === undefined ? undefined : JSON.stringify(body),
+      body: body === undefined
+        ? undefined
+        : body instanceof FormData
+          ? body
+          : JSON.stringify(body),
       signal: controller.signal
     });
 
@@ -1184,6 +1249,10 @@ function signOut(message = '') {
   notificationsUnread = false;
   managementTab = 'courses';
   libraryAdminTab = 'rooms';
+  gradeSectionId = '';
+  learningSectionId = '';
+  learningManagedSection = false;
+  learningCourseId = '';
 
   clearInterval(notificationTimer);
 
@@ -1347,57 +1416,100 @@ async function start() {
 const pages = {};
 
 function buildNav() {
-  const items = [
-    ['overview', 'Overview'],
-    ['announcements', 'Announcements'],
-    ['catalog', 'Course catalog']
+  const groups = [
+    {
+      label: 'General',
+      items: [
+        ['overview', 'Overview'],
+        ['announcements', 'Announcements'],
+        ['catalog', 'Course catalog']
+      ]
+    }
   ];
 
+  const termItems = [];
   if (is('STUDENT')) {
-    items.push(
+    termItems.push(
       ['registration', 'Course registration'],
       ['schedule', 'Weekly schedule'],
-      ['library', 'Library']
+      ['library', 'Library'],
+      ['grades', 'Grades']
     );
   }
-
   if (is('INSTRUCTOR', 'HEAD')) {
-    items.push(
+    termItems.push(
       ['teaching', 'My teaching'],
-      ['advisor', 'Advisor review']
+      ['advisor', 'Advisor review'],
+      ['grades', 'Grades']
     );
   }
-
-  items.push(
-    ['outcomes', 'Program outcomes'],
-    ['feedback', 'Private feedback']
-  );
-
-  items.push(['sharing', 'Sharing permissions']);
-
-  items.push(
-    ['discussions', 'Discussions'],
-    ['notifications', 'Notifications']
-  );
-
-  if (is('HEAD', 'ADMIN')) {
-    items.push(['management', 'Academic management']);
+  if (termItems.length) {
+    groups.push({ label: 'Course and term operations', items: termItems });
   }
 
+  groups.push({
+    label: 'Academic',
+    items: [
+      ['outcomes', 'Program outcomes'],
+      ['learningOutcomes', 'Learning outcomes']
+    ]
+  });
+
+  groups.push({
+    label: 'Forms and feedback',
+    items: [
+      ['feedback', 'Private feedback'],
+      ['sharing', 'Sharing permissions'],
+      ['discussions', 'Discussions'],
+      ['notifications', 'Notifications']
+    ]
+  });
+
+  const managementItems = [];
+  if (is('HEAD', 'ADMIN')) managementItems.push(['management', 'Academic management']);
   if (is('ADMIN')) {
-    items.push(
+    managementItems.push(
       ['libraryAdmin', 'Library management'],
       ['users', 'User accounts']
     );
   }
+  if (managementItems.length) {
+    groups.push({ label: 'Management', items: managementItems });
+  }
 
-  items.push(['profile', 'My account']);
+  groups.push({
+    label: 'Account',
+    items: [['profile', 'My account']]
+  });
 
   $('nav').replaceChildren();
 
-  items.forEach(([id, label]) => {
-    const control = button($('nav'), label, () => go(id));
-    control.dataset.page = id;
+  groups.forEach((group, index) => {
+    const wrapper = node('section', 'nav-group');
+    const items = node('div', 'nav-group-items');
+    const itemsId = `nav-group-${index}`;
+    items.id = itemsId;
+
+    const toggle = button(
+      wrapper,
+      group.label,
+      () => {
+        const collapsed = toggle.getAttribute('aria-expanded') === 'true';
+        toggle.setAttribute('aria-expanded', String(!collapsed));
+        items.hidden = collapsed;
+      },
+      'nav-group-toggle'
+    );
+    toggle.setAttribute('aria-expanded', 'true');
+    toggle.setAttribute('aria-controls', itemsId);
+    add(wrapper, items);
+
+    group.items.forEach(([id, itemLabel]) => {
+      const control = button(items, itemLabel, () => go(id));
+      control.dataset.page = id;
+    });
+
+    add($('nav'), wrapper);
   });
 
   $('account').textContent =
@@ -3117,6 +3229,569 @@ pages.notifications = async parent => {
       }
     }
   );
+};
+
+function gradeStudentName(student) {
+  return [student.student_no, student.first_name, student.last_name]
+    .filter(Boolean)
+    .join(' - ') || student.email || 'Student';
+}
+
+const gradeComponentFields = () => [
+  choice('kind', 'Component type', [
+    'MIDTERM', 'FINAL', 'PROJECT', 'ASSIGNMENT', 'QUIZ', 'ATTENDANCE', 'OTHER'
+  ]),
+  F('name', 'Component name', 'text', { max: 120 }),
+  num('weight', 'Weight (%)', { min: 0, maxValue: 100 }),
+  num('max_score', 'Maximum score', { min: 0.01 }),
+  num('display_order', 'Display order', { min: 1, value: 1 })
+];
+
+async function downloadGradeTemplate(component) {
+  const response = await fetch(
+    API + `/api/grades/teaching/components/${component.id}/grades/template/`,
+    { headers: { Authorization: 'Bearer ' + session.access } }
+  );
+
+  if (response.status === 401) {
+    const tokens = await request(
+      '/api/auth/refresh/',
+      'POST',
+      { refresh: session.refresh },
+      false
+    );
+    session.access = tokens.access;
+    return downloadGradeTemplate(component);
+  }
+
+  if (!response.ok) throw new Error(UNAVAILABLE);
+
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const link = node('a');
+  link.href = url;
+  link.download = `${component.name || 'grades'}.csv`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+function gradeEntryEditor(component, sheet) {
+  const fields = sheet.students.map(student => F(
+    'student_' + student.id,
+    gradeStudentName(student),
+    'number',
+    {
+      required: false,
+      min: 0,
+      maxValue: Number(component.max_score),
+      help: 'Leave blank to remove this grade.'
+    }
+  ));
+
+  const initial = {};
+  sheet.students.forEach(student => {
+    initial['student_' + student.id] =
+      student.grades[String(component.id)] ?? '';
+  });
+
+  editor(
+    'Grades - ' + component.name,
+    fields,
+    initial,
+    values => request(
+      `/api/grades/teaching/components/${component.id}/grades/`,
+      'POST',
+      {
+        grades: sheet.students.map(student => ({
+          student: student.id,
+          score: values['student_' + student.id]
+        }))
+      }
+    ),
+    {
+      notice: `Enter scores from 0 to ${component.max_score}. Blank values remove a grade.`,
+      submit: 'Save grades'
+    }
+  );
+}
+
+async function gradeTeachingSection(parent, sectionId) {
+  parent.replaceChildren();
+  const sheet = await request(
+    `/api/grades/teaching/sections/${sectionId}/sheet/`
+  );
+
+  const head = card(parent, `${sheet.section.course_code} - ${sheet.section.course_name}`);
+  text(head, `Section ${sheet.section.number} - ${sheet.section.term}`);
+  text(head, `Total component weight: ${sheet.weight_total}%`, 'muted');
+  button(head, 'Back to sections', () => {
+    gradeSectionId = '';
+    return go('grades');
+  });
+
+  const components = card(parent, 'Grading components');
+  button(
+    components,
+    'Add component',
+    () => editor(
+      'New grading component',
+      gradeComponentFields(),
+      { weight: 0, max_score: 100, display_order: sheet.components.length + 1 },
+      values => request(
+        `/api/grades/teaching/sections/${sectionId}/components/`,
+        'POST',
+        values
+      ),
+      { after: () => gradeTeachingSection(parent, sectionId) }
+    ),
+    'primary'
+  );
+
+  sheet.components.forEach(component => {
+    const box = card(components, component.name);
+    add(box, badge(component.kind));
+    text(
+      box,
+      `${component.weight}% - max ${component.max_score} - ` +
+      `${component.grade_count} grades`,
+      'muted'
+    );
+    if (component.is_published) add(box, badge('Published'));
+
+    const actions = row(box);
+    button(actions, 'Enter grades', () => gradeEntryEditor(component, sheet));
+    button(actions, 'Download template', () => downloadGradeTemplate(component));
+
+    const upload = node('input');
+    upload.type = 'file';
+    upload.accept = '.csv,text/csv';
+    upload.hidden = true;
+    add(box, upload);
+    const importButton = button(actions, 'Import CSV', () => {
+      if (!upload.files?.[0]) {
+        upload.click();
+        return;
+      }
+      const form = new FormData();
+      form.append('file', upload.files[0]);
+      return request(
+        `/api/grades/teaching/components/${component.id}/grades/import/`,
+        'POST',
+        form
+      ).then(() => gradeTeachingSection(parent, sectionId));
+    });
+    upload.onchange = () => {
+      if (upload.files?.[0]) importButton.click();
+    };
+
+    button(actions, 'Edit', () => editor(
+      'Edit grading component',
+      gradeComponentFields(),
+      component,
+      values => request(
+        `/api/grades/teaching/components/${component.id}/`,
+        'PATCH',
+        values
+      ),
+      { after: () => gradeTeachingSection(parent, sectionId) }
+    ));
+
+    button(
+      actions,
+      component.is_published ? 'Unpublish' : 'Publish',
+      () => request(
+        `/api/grades/teaching/components/${component.id}/` +
+        (component.is_published ? 'unpublish/' : 'publish/'),
+        'POST',
+        {}
+      ).then(() => gradeTeachingSection(parent, sectionId))
+    );
+
+    if (!component.grade_count && !component.is_published) {
+      button(actions, 'Delete', () => confirmAction(
+        'Delete component?',
+        'This component has no grades and can be removed.',
+        () => request(
+          `/api/grades/teaching/components/${component.id}/`,
+          'DELETE'
+        ),
+        () => gradeTeachingSection(parent, sectionId)
+      ), 'danger');
+    }
+  });
+
+  if (!sheet.components.length) empty(components, 'No grading components have been created.');
+
+  const roster = card(parent, 'Grade sheet');
+  table(
+    roster,
+    [
+      'Student',
+      ...sheet.components.map(component => component.name),
+      'Average',
+      'Graded weight'
+    ],
+    sheet.students.map(student => [
+      gradeStudentName(student),
+      ...sheet.components.map(component =>
+        student.grades[String(component.id)] ?? '-'
+      ),
+      student.average ?? '-',
+      student.graded_weight == null ? '-' : `${student.graded_weight}%`
+    ])
+  );
+}
+
+pages.grades = async parent => {
+  if (is('STUDENT')) {
+    heading(parent, 'Grades', 'Published scores and course averages.');
+    if (!await termPicker(parent, () => go('grades'))) return;
+
+    const sections = await request('/api/grades/mine/' + termQuery());
+    if (!sections.length) {
+      empty(parent, 'No published grades are available for this term.');
+      return;
+    }
+
+    sections.forEach(item => {
+      const section = card(
+        parent,
+        `${item.course.code} - ${item.course.name}`
+      );
+      text(
+        section,
+        `Section ${item.section.number} - ${item.instructor || 'Instructor not assigned'}`,
+        'muted'
+      );
+      text(
+        section,
+        `Average: ${item.average ?? '-'} - ` +
+        `Graded weight: ${item.graded_weight ?? 0}% - ` +
+        `Earned: ${item.earned ?? '-'}`
+      );
+      table(
+        section,
+        ['Component', 'Weight', 'Score', 'Status'],
+        item.components.map(component => [
+          component.name,
+          `${component.weight}%`,
+          component.score == null
+            ? 'Not graded'
+            : `${component.score} / ${component.max_score}`,
+          component.is_published ? 'Published' : 'Pending'
+        ])
+      );
+    });
+    return;
+  }
+
+  heading(parent, 'Grades', 'Manage components and scores for your sections.');
+  if (!await termPicker(parent, () => go('grades'))) return;
+
+  if (gradeSectionId) {
+    await gradeTeachingSection(parent, gradeSectionId);
+    return;
+  }
+
+  await paged(
+    parent,
+    '/api/courses/my-sections/' + termQuery(),
+    (list, section) => {
+      const box = sectionCard(list, section);
+      button(box, 'Manage grades', () => {
+        gradeSectionId = String(section.id);
+        return go('grades');
+      }, 'primary');
+    }
+  );
+};
+
+const learningOutcomeFields = () => [
+  F('code', 'Code', 'text', { max: 16 }),
+  F('title', 'Title', 'text', { max: 200 }),
+  F('description', 'Description', 'textarea', { max: 4000 }),
+  num('display_order', 'Display order', { min: 1, value: 1 }),
+  check('is_active', 'Active', true)
+];
+
+async function editProgramLinks(outcome) {
+  const [programs, links] = await Promise.all([
+    all('/api/program-outcomes/'),
+    request(`/api/learning-outcomes/manage/${outcome.id}/program-links/`)
+  ]);
+  const initial = {};
+  links.forEach(link => {
+    initial['po_' + link.program_outcome] = link.weight;
+  });
+  const fields = programs.map(program => num(
+    'po_' + program.id,
+    `${program.code} - ${program.title}`,
+    { required: false, min: 1, maxValue: 100 }
+  ));
+
+  editor(
+    'Program outcome links - ' + outcome.code,
+    fields,
+    initial,
+    values => request(
+      `/api/learning-outcomes/manage/${outcome.id}/program-links/`,
+      'PUT',
+      {
+        links: programs
+          .map(program => ({
+            program_outcome: program.id,
+            weight: values['po_' + program.id]
+          }))
+          .filter(link => link.weight != null && link.weight !== '')
+      }
+    ),
+    {
+      notice: 'Weights are relative and may be different from 100% in total.',
+      submit: 'Save links'
+    }
+  );
+}
+
+async function learningCourseManager(parent) {
+  parent.replaceChildren();
+  add(parent, node('h2', '', 'Course learning outcomes'));
+  const courses = await all('/api/courses/manage/courses/');
+  if (!courses.length) {
+    empty(parent, 'No manageable courses are available.');
+    return;
+  }
+
+  const chooser = node('form', 'toolbar');
+  const select = inputField(
+    chooser,
+    choice(
+      'course',
+      'Course',
+      courses.map(course => [course.id, `${course.code} - ${course.name}`])
+    ),
+    learningCourseId || courses[0].id
+  );
+  const submit = node('button', 'primary', 'Open course');
+  submit.type = 'submit';
+  add(chooser, submit);
+  add(parent, chooser);
+
+  const content = node('div');
+  add(parent, content);
+  chooser.onsubmit = event => {
+    event.preventDefault();
+    learningCourseId = select.input.value;
+    return learningCourseManager(parent);
+  };
+
+  const courseId = learningCourseId || String(courses[0].id);
+  learningCourseId = courseId;
+  const outcomes = await all(`/api/learning-outcomes/manage/courses/${courseId}/`);
+  const section = card(content, 'Learning outcomes');
+  button(
+    section,
+    'Add learning outcome',
+    () => editor(
+      'New learning outcome',
+      learningOutcomeFields(),
+      {},
+      values => request(
+        `/api/learning-outcomes/manage/courses/${courseId}/`,
+        'POST',
+        values
+      ),
+      { after: () => learningCourseManager(parent) }
+    ),
+    'primary'
+  );
+
+  outcomes.forEach(outcome => {
+    const box = card(section, `${outcome.code} - ${outcome.title}`);
+    text(box, outcome.description, 'copy');
+    if (!outcome.is_active) add(box, badge('Inactive'));
+    button(box, 'Edit', () => editor(
+      'Edit learning outcome',
+      learningOutcomeFields(),
+      outcome,
+      values => request(
+        `/api/learning-outcomes/manage/${outcome.id}/`,
+        'PATCH',
+        values
+      ),
+      { after: () => learningCourseManager(parent) }
+    ));
+    button(box, 'Program outcome links', () => editProgramLinks(outcome));
+  });
+}
+
+async function learningSectionMatrix(parent, sectionId, managed = false) {
+  const matrix = await request(
+    `/api/learning-outcomes/${managed ? 'manage' : 'teaching'}/sections/${sectionId}/matrix/`
+  );
+  const title = card(
+    parent,
+    `${matrix.section.course_code} - ${matrix.section.course_name}`
+  );
+  text(title, `Section ${matrix.section.number}`);
+  button(title, 'Back to sections', () => {
+    learningSectionId = '';
+    return go('learningOutcomes');
+  });
+
+  matrix.components.forEach(component => {
+    const box = card(parent, component.name);
+    text(box, `${component.kind} - ${component.weight}%`, 'muted');
+    const fields = matrix.learning_outcomes.map(outcome => num(
+      'lo_' + outcome.id,
+      `${outcome.code} - ${outcome.title}`,
+      { required: false, min: 1, maxValue: 100 }
+    ));
+    const initial = Object.fromEntries(
+      matrix.learning_outcomes.map(outcome => [
+        'lo_' + outcome.id,
+        component.links[String(outcome.id)] ?? ''
+      ])
+    );
+    button(box, 'Edit component links', () => editor(
+      'Learning outcome links - ' + component.name,
+      fields,
+      initial,
+      values => request(
+        `/api/learning-outcomes/${managed ? 'manage' : 'teaching'}/components/${component.id}/links/`,
+        'PUT',
+        {
+          links: matrix.learning_outcomes
+            .map(outcome => ({
+              learning_outcome: outcome.id,
+              weight: values['lo_' + outcome.id]
+            }))
+            .filter(link => link.weight != null && link.weight !== '')
+        }
+      ),
+      { notice: 'Relative weights describe how much this component measures each outcome.' }
+    ));
+  });
+
+  if (!managed) {
+    const scores = await request(
+      `/api/learning-outcomes/teaching/sections/${sectionId}/scores/`
+    );
+    const scoreCard = card(parent, 'Learning outcome scores');
+    table(
+      scoreCard,
+      ['Student', ...scores.learning_outcomes.map(outcome => outcome.code)],
+      scores.students.map(student => [
+        gradeStudentName(student),
+        ...scores.learning_outcomes.map(outcome =>
+          student.scores[String(outcome.id)] ?? '-'
+        )
+      ])
+    );
+  }
+}
+
+function renderLearningProfile(parent, profile) {
+  text(
+    parent,
+    `${profile.student.student_no || 'Student'} - ` +
+    `Department ${profile.student.department || '-'}`,
+    'muted'
+  );
+  profile.program_outcomes.forEach(outcome => {
+    const box = card(parent, `${outcome.code} - ${outcome.title}`);
+    text(box, outcome.score == null ? 'No score yet.' : `Score: ${outcome.score}`);
+    if (outcome.courses?.length) {
+      table(
+        box,
+        ['Contributing course'],
+        outcome.courses.map(course => [course])
+      );
+    }
+  });
+}
+
+async function learningStudentProfile(parent) {
+  renderLearningProfile(parent, await request('/api/learning-outcomes/mine/'));
+}
+
+async function learningStudentDetail(id) {
+  const profile = await request(`/api/learning-outcomes/students/${id}/`);
+  const parent = modal('Program outcome profile');
+  renderLearningProfile(parent, profile);
+}
+
+async function learningStudentList(parent) {
+  const section = card(parent, 'Student program profiles');
+  await paged(
+    section,
+    '/api/learning-outcomes/students/',
+    (list, student) => {
+      const box = card(list, gradeStudentName(student));
+      text(box, `${student.email} - ${student.department_name || 'No department'}`, 'muted');
+      button(box, 'Open profile', () => learningStudentDetail(student.id));
+    }
+  );
+}
+
+pages.learningOutcomes = async parent => {
+  heading(
+    parent,
+    'Learning outcomes',
+    'Connect course outcomes, grading components and program outcomes.'
+  );
+
+  if (is('STUDENT')) {
+    await learningStudentProfile(parent);
+    return;
+  }
+
+  if (is('HEAD', 'ADMIN')) {
+    const manage = card(parent, 'Course learning outcomes');
+    await learningCourseManager(manage);
+
+    const managedSections = card(parent, 'Managed section matrices');
+    if (!await termPicker(managedSections, () => go('learningOutcomes'))) return;
+    if (learningSectionId && learningManagedSection) {
+      await learningSectionMatrix(managedSections, learningSectionId, true);
+      return;
+    }
+    await paged(
+      managedSections,
+      '/api/courses/manage/sections/' + termQuery(),
+      (list, section) => {
+        const box = sectionCard(list, section);
+        button(box, 'Open managed matrix', () => {
+          learningSectionId = String(section.id);
+          learningManagedSection = true;
+          return go('learningOutcomes');
+        }, 'primary');
+      }
+    );
+    await learningStudentList(parent);
+  }
+
+  if (is('INSTRUCTOR', 'HEAD')) {
+    const teaching = card(parent, 'Teaching section matrix');
+    if (!await termPicker(teaching, () => go('learningOutcomes'))) return;
+
+    if (learningSectionId && !learningManagedSection) {
+      await learningSectionMatrix(teaching, learningSectionId);
+      return;
+    }
+
+    await paged(
+      teaching,
+      '/api/courses/my-sections/' + termQuery(),
+      (list, section) => {
+        const box = sectionCard(list, section);
+        button(box, 'Open outcome matrix', () => {
+          learningSectionId = String(section.id);
+          learningManagedSection = false;
+          return go('learningOutcomes');
+        }, 'primary');
+      }
+    );
+  }
 };
 
 function courseFields() {
