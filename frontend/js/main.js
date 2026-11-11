@@ -1,0 +1,3983 @@
+
+'use strict';
+
+const BACKEND_ORIGIN = window.QUALT_API_ORIGIN || '';
+const API = BACKEND_ORIGIN.replace(/\/+$/, '');
+const UNAVAILABLE =
+  'This action is currently unavailable. Please try again later.';
+
+const $ = id => document.getElementById(id);
+
+const node = (tag, cls, value) => {
+  const element = document.createElement(tag);
+  if (cls) element.className = cls;
+  if (value !== undefined && value !== null) {
+    element.textContent = String(value);
+  }
+  return element;
+};
+
+const add = (parent, ...children) => {
+  children.flat().filter(Boolean).forEach(child => parent.append(child));
+  return parent;
+};
+
+const text = (parent, value, cls = '') =>
+  add(parent, node('p', cls, value));
+
+const row = parent =>
+  add(parent, node('div', 'row')).lastElementChild;
+
+const card = (parent, title) => {
+  const section = node('section', 'card');
+  if (title) add(section, node('h2', '', title));
+  add(parent, section);
+  return section;
+};
+
+const empty = (parent, message = 'Nothing to show yet.') =>
+  text(parent, message, 'empty');
+
+const human = value =>
+  String(value ?? '')
+    .replace(/_/g, ' ')
+    .toLowerCase()
+    .replace(/\b\w/g, character => character.toUpperCase());
+
+const badge = value => node('span', 'badge', human(value));
+
+const person = user => user
+  ? user.name ||
+    [user.first_name, user.last_name].filter(Boolean).join(' ') ||
+    user.email ||
+    'Campus member'
+  : 'Not assigned';
+
+const date = value => value
+  ? new Intl.DateTimeFormat('en-GB', {
+      dateStyle: 'medium',
+      timeStyle: 'short'
+    }).format(new Date(value))
+  : '—';
+
+const dayNames = [
+  '',
+  'Monday',
+  'Tuesday',
+  'Wednesday',
+  'Thursday',
+  'Friday',
+  'Saturday',
+  'Sunday'
+];
+
+let session = null;
+let temporaryPassword = '';
+let refreshPromise = null;
+let epoch = 0;
+let route = 'overview';
+let navigation = 0;
+let terms = [];
+let departments = [];
+let selectedTerm = '';
+let notificationTimer = null;
+
+let announcementTab = 'official';
+let libraryPeriod = 'upcoming';
+let notificationsUnread = false;
+let managementTab = 'courses';
+let libraryAdminTab = 'rooms';
+let gradeSectionId = '';
+let learningSectionId = '';
+let learningManagedSection = false;
+let learningCourseId = '';
+
+const is = (...roles) =>
+  !!session && roles.includes(session.user.role);
+
+const current = stamp => session && epoch === stamp;
+
+function storage(key, value) {
+  try {
+    if (value === undefined) return localStorage.getItem(key);
+    if (value === null) localStorage.removeItem(key);
+    else localStorage.setItem(key, value);
+  } catch {}
+  return null;
+}
+
+function theme(dark) {
+  document.body.classList.toggle('dark-mode', dark);
+  $('theme').textContent = dark ? 'Light mode' : 'Dark mode';
+  $('theme').setAttribute('aria-pressed', String(dark));
+}
+
+theme(
+  storage('qualt-theme') === 'dark' ||
+  (
+    !storage('qualt-theme') &&
+    window.matchMedia('(prefers-color-scheme: dark)').matches
+  )
+);
+
+$('theme').onclick = () => {
+  const dark = !document.body.classList.contains('dark-mode');
+  theme(dark);
+  storage('qualt-theme', dark ? 'dark' : 'light');
+};
+
+$('email').value = storage('qualt-email') || '';
+$('remember').checked = !!$('email').value;
+
+$('remember').onchange = () => {
+  if (!$('remember').checked) storage('qualt-email', null);
+};
+
+$('show-password').onclick = () => {
+  const show = $('password').type === 'password';
+  $('password').type = show ? 'text' : 'password';
+  $('show-password').textContent = show ? 'Hide' : 'Show';
+  $('show-password').setAttribute(
+    'aria-label',
+    show ? 'Hide password' : 'Show password'
+  );
+  $('show-password').setAttribute('aria-pressed', String(show));
+};
+
+$('forgot').onclick = () => {
+  $('auth-message').textContent = UNAVAILABLE;
+};
+
+function messages(value) {
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) return value.map(messages).join('\n');
+
+  if (value && typeof value === 'object') {
+    return Object.entries(value)
+      .filter(([key]) => key !== 'code')
+      .map(([key, item]) =>
+        (
+          key === 'detail' || key === 'non_field_errors'
+            ? ''
+            : human(key) + ': '
+        ) + messages(item)
+      )
+      .join('\n');
+  }
+
+  return '';
+}
+
+async function request(
+  path,
+  method = 'GET',
+  body,
+  auth = true,
+  retry = true
+) {
+  const stamp = epoch;
+  const owner = session;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 20000);
+
+  try {
+    if (auth && !owner) throw new Error('Please sign in again.');
+
+    const headers = { Accept: 'application/json' };
+
+    if (body !== undefined && !(body instanceof FormData)) {
+      headers['Content-Type'] = 'application/json';
+    }
+
+    if (auth) {
+      headers.Authorization = 'Bearer ' + owner.access;
+    }
+
+    const response = await fetch(API + path, {
+      method,
+      headers,
+      body: body === undefined
+        ? undefined
+        : body instanceof FormData
+          ? body
+          : JSON.stringify(body),
+      signal: controller.signal
+    });
+
+    const data = response.status === 204
+      ? null
+      : await response.json().catch(() => null);
+
+    if (auth && !current(stamp)) {
+      throw new Error('Your session has ended.');
+    }
+
+    if (response.status === 401 && auth && retry) {
+      if (!refreshPromise) {
+        const promise = request(
+          '/api/auth/refresh/',
+          'POST',
+          { refresh: owner.refresh },
+          false
+        )
+          .then(tokens => {
+            if (!current(stamp)) {
+              throw new Error('Your session has ended.');
+            }
+            if (!tokens?.access) throw new Error(UNAVAILABLE);
+
+            owner.access = tokens.access;
+            if (tokens.refresh) owner.refresh = tokens.refresh;
+          })
+          .catch(error => {
+            if (error.status === 401 && current(stamp)) {
+              signOut('Your session has expired. Please sign in again.');
+            }
+            throw error;
+          })
+          .finally(() => {
+            if (refreshPromise === promise) refreshPromise = null;
+          });
+
+        refreshPromise = promise;
+      }
+
+      await refreshPromise;
+      return request(path, method, body, auth, false);
+    }
+
+    if (!response.ok) {
+      const error = new Error(
+        response.status >= 500
+          ? UNAVAILABLE
+          : messages(data) || UNAVAILABLE
+      );
+
+      error.status = response.status;
+      error.data = data;
+
+      if (response.status === 401 && auth) {
+        signOut('Your session has expired. Please sign in again.');
+      }
+
+      throw error;
+    }
+
+    if (response.status !== 204 && data === null) {
+      throw new Error(UNAVAILABLE);
+    }
+
+    return data;
+  } catch (error) {
+    if (error.name === 'AbortError' || error instanceof TypeError) {
+      throw new Error(UNAVAILABLE);
+    }
+    throw error;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function nextPath(url) {
+  const parsed = new URL(url, API || location.origin);
+
+  if (!parsed.pathname.startsWith('/api/')) {
+    throw new Error(UNAVAILABLE);
+  }
+
+  return parsed.pathname + parsed.search;
+}
+
+async function all(path) {
+  let result = [];
+  let next = path;
+
+  while (next) {
+    const data = await request(next);
+
+    if (Array.isArray(data)) return result.concat(data);
+
+    result.push(...data.results);
+    next = data.next ? nextPath(data.next) : null;
+  }
+
+  return result;
+}
+
+function errorBox(parent, error) {
+  text(parent, error.message || UNAVAILABLE, 'message')
+    .lastElementChild.setAttribute('role', 'alert');
+}
+
+function button(parent, label, action, cls = '') {
+  const control = node('button', cls, label);
+  control.type = 'button';
+
+  control.onclick = async () => {
+    if (control.disabled) return;
+    control.disabled = true;
+
+    try {
+      await action(control);
+    } catch (error) {
+      const old = parent.querySelector(':scope > .message');
+      if (old) old.remove();
+      errorBox(parent, error);
+    } finally {
+      control.disabled = false;
+    }
+  };
+
+  add(parent, control);
+  return control;
+}
+
+function table(parent, headers, rows) {
+  if (!rows.length) {
+    empty(parent);
+    return;
+  }
+
+  const wrap = node('div', 'table-wrap');
+  const element = node('table');
+  const head = node('tr');
+
+  headers.forEach(header => add(head, node('th', '', header)));
+  add(element, add(node('thead'), head));
+
+  const body = node('tbody');
+
+  rows.forEach(values => {
+    const tr = node('tr');
+
+    values.forEach(value => {
+      const td = node('td');
+      add(
+        td,
+        value instanceof Node
+          ? value
+          : document.createTextNode(String(value ?? '—'))
+      );
+      add(tr, td);
+    });
+
+    add(body, tr);
+  });
+
+  add(parent, add(wrap, add(element, body)));
+}
+
+async function paged(parent, path, render) {
+  const list = node('div');
+  const controls = node('div', 'row');
+
+  add(parent, list, controls);
+
+  let next = path;
+
+  const load = async () => {
+    const data = await request(next);
+    const items = Array.isArray(data) ? data : data.results;
+
+    list.querySelector(':scope > .empty')?.remove();
+    items.forEach(item => render(list, item));
+
+    if (!list.children.length) empty(list);
+
+    next = !Array.isArray(data) && data.next
+      ? nextPath(data.next)
+      : null;
+
+    controls.replaceChildren();
+
+    if (next) button(controls, 'Load more', load);
+  };
+
+  try {
+    await load();
+  } catch (error) {
+    errorBox(list, error);
+    button(controls, 'Retry', load);
+  }
+}
+
+function modal(title) {
+  $('dialog-title').textContent = title;
+  $('dialog-body').replaceChildren();
+
+  if (!$('dialog').open) $('dialog').showModal();
+
+  return $('dialog-body');
+}
+
+$('close-dialog').onclick = () => $('dialog').close();
+
+$('dialog').addEventListener('close', () => {
+  $('dialog-body').replaceChildren();
+});
+
+const F = (name, label, type = 'text', extra = {}) =>
+  ({ name, label, type, ...extra });
+
+const choice = (name, label, options, extra = {}) =>
+  F(name, label, 'select', { options, ...extra });
+
+const check = (name, label, value = false) =>
+  F(name, label, 'checkbox', { value, required: false });
+
+const num = (name, label, extra = {}) =>
+  F(name, label, 'number', { min: 0, ...extra });
+
+const opt = (name, label, type = 'text', extra = {}) =>
+  F(name, label, type, { required: false, ...extra });
+
+const idList = (name, label) =>
+  opt(name, label, 'ids', {
+    help: 'Enter record numbers separated by commas.'
+  });
+
+const termOptions = () => terms.map(term => [
+  term.id,
+  `${term.year} ${human(term.season)}`
+]);
+
+const departmentOptions = () => departments.map(department => [
+  department.id,
+  `${department.code} · ${department.name}`
+]);
+
+function inputField(parent, field, value) {
+  const label = node(
+    'label',
+    field.type === 'checkbox' ? 'check' : 'field'
+  );
+  const caption = node('span', '', field.label);
+  let input;
+
+  if (field.type === 'select' || field.type === 'multi') {
+    input = node('select');
+    input.multiple = field.type === 'multi';
+
+    if (!input.multiple) add(input, new Option('Choose…', ''));
+
+    (field.options || []).forEach(option => {
+      const [optionValue, optionLabel] = Array.isArray(option)
+        ? option
+        : [option, human(option)];
+
+      add(input, new Option(optionLabel, optionValue));
+    });
+  } else if (['textarea', 'lines', 'ids'].includes(field.type)) {
+    input = node('textarea');
+  } else {
+    input = node('input');
+    input.type = field.type === 'datetime'
+      ? 'datetime-local'
+      : field.type;
+  }
+
+  input.name = field.name;
+  input.required =
+    field.required !== false &&
+    field.type !== 'checkbox' &&
+    field.type !== 'multi';
+
+  if (field.max) input.maxLength = field.max;
+  if (field.min !== undefined) input.min = field.min;
+  if (field.maxValue !== undefined) input.max = field.maxValue;
+
+  value = value ?? field.value ?? '';
+
+  if (field.type === 'checkbox') {
+    input.checked = !!value;
+    add(label, input, caption);
+  } else {
+    if (field.type === 'multi') {
+      const ids = (value || []).map(item => String(item?.id ?? item));
+      [...input.options].forEach(option => {
+        option.selected = ids.includes(option.value);
+      });
+    } else if (field.type === 'datetime' && value) {
+      const parsed = new Date(value);
+      input.value = new Date(
+        parsed.getTime() - parsed.getTimezoneOffset() * 60000
+      ).toISOString().slice(0, 16);
+    } else if (field.type === 'ids') {
+      input.value = Array.isArray(value)
+        ? value.map(item => item?.id ?? item).join(', ')
+        : value;
+    } else if (field.type === 'lines') {
+      input.value = Array.isArray(value) ? value.join('\n') : value;
+    } else {
+      input.value = value;
+    }
+
+    add(label, caption, input);
+  }
+
+  if (field.help) {
+    add(label, node('small', 'help', field.help));
+  }
+
+  const error = node('small', 'field-error');
+  add(label, error);
+  add(parent, label);
+
+  return {
+    input,
+    error,
+    read: () => {
+      const raw = input.value;
+
+      if (field.type === 'checkbox') return input.checked;
+
+      if (field.type === 'multi') {
+        return [...input.selectedOptions].map(option =>
+          Number(option.value)
+        );
+      }
+
+      if (field.type === 'number' || field.numeric) {
+        return raw === '' ? null : Number(raw);
+      }
+
+      if (field.type === 'datetime') {
+        return raw ? new Date(raw).toISOString() : null;
+      }
+
+      if (field.type === 'lines') {
+        return raw.split('\n').map(line => line.trim()).filter(Boolean);
+      }
+
+      if (field.type === 'ids') {
+        if (!raw.trim()) return [];
+
+        const ids = raw.split(',').map(item => Number(item.trim()));
+
+        if (ids.some(id => !Number.isInteger(id) || id < 1)) {
+          throw new Error(
+            field.label +
+            ': use positive record numbers separated by commas.'
+          );
+        }
+
+        return ids;
+      }
+
+      return raw;
+    }
+  };
+}
+
+function meetingFields(parent, initial = []) {
+  const wrap = card(parent, 'Weekly meetings');
+  const entries = [];
+
+  const insert = value => {
+    const box = node('div', 'meeting');
+    const fields = {};
+    const line = row(box);
+
+    [
+      choice(
+        'weekday',
+        'Day',
+        dayNames.slice(1).map((day, index) => [index + 1, day]),
+        { numeric: true }
+      ),
+      F('start_time', 'Start', 'time'),
+      F('end_time', 'End', 'time'),
+      opt('room', 'Room')
+    ].forEach(field => {
+      fields[field.name] = inputField(
+        line,
+        field,
+        value?.[field.name]
+      );
+    });
+
+    const entry = { box, fields };
+    entries.push(entry);
+
+    button(box, 'Remove meeting', () => {
+      entries.splice(entries.indexOf(entry), 1);
+      box.remove();
+    });
+
+    add(wrap, box);
+  };
+
+  initial.forEach(insert);
+  button(wrap, 'Add meeting', () => insert());
+
+  return {
+    read: () => entries.map(entry =>
+      Object.fromEntries(
+        Object.entries(entry.fields).map(([key, field]) => [
+          key,
+          field.read()
+        ])
+      )
+    )
+  };
+}
+
+function editor(title, fields, initial, save, options = {}) {
+  const parent = modal(title);
+  const form = node('form');
+
+  if (options.notice) text(form, options.notice, 'notice');
+
+  const controls = {};
+
+  fields.forEach(field => {
+    controls[field.name] = field.type === 'meetings'
+      ? meetingFields(form, initial?.[field.name] || [])
+      : inputField(form, field, initial?.[field.name]);
+  });
+
+  const message = node('p', 'message');
+  message.setAttribute('role', 'alert');
+
+  const actions = row(form);
+  const submit = node('button', 'primary', options.submit || 'Save');
+  submit.type = 'submit';
+
+  add(actions, submit);
+  button(actions, 'Cancel', () => $('dialog').close());
+
+  add(form, message);
+  add(parent, form);
+
+  if (options.setup) options.setup(controls);
+
+  form.onsubmit = async event => {
+    event.preventDefault();
+    if (submit.disabled) return;
+
+    const stamp = epoch;
+    message.textContent = '';
+
+    Object.values(controls).forEach(control => {
+      if (control.error) control.error.textContent = '';
+      control.input?.removeAttribute('aria-invalid');
+    });
+
+    submit.disabled = true;
+    let committed = false;
+
+    try {
+      const values = Object.fromEntries(
+        Object.entries(controls).map(([key, control]) => [
+          key,
+          control.read()
+        ])
+      );
+
+      if (options.validate) options.validate(values);
+
+      const result = await save(values);
+      committed = true;
+
+      if (!current(stamp)) return;
+
+      if (parent.contains(form)) $('dialog').close();
+
+      if (options.after) await options.after(result);
+      else await go(route);
+    } catch (error) {
+      if (!current(stamp)) return;
+
+      if (committed) {
+        if (options.after) errorBox($('content'), error);
+      } else {
+        message.textContent = error.message || UNAVAILABLE;
+
+        for (const [key, value] of Object.entries(error.data || {})) {
+          if (controls[key]?.error) {
+            controls[key].error.textContent = messages(value);
+            controls[key].input?.setAttribute('aria-invalid', 'true');
+          }
+        }
+      }
+    } finally {
+      submit.disabled = false;
+    }
+  };
+
+  return controls;
+}
+
+function confirmAction(title, description, save, after) {
+  editor(title, [], {}, save, {
+    notice: description,
+    submit: 'Confirm',
+    after
+  });
+}
+
+function signOut(message = '') {
+  epoch++;
+  navigation++;
+
+  session = null;
+  temporaryPassword = '';
+  refreshPromise = null;
+  terms = [];
+  departments = [];
+  selectedTerm = '';
+
+  announcementTab = 'official';
+  libraryPeriod = 'upcoming';
+  notificationsUnread = false;
+  managementTab = 'courses';
+  libraryAdminTab = 'rooms';
+  gradeSectionId = '';
+  learningSectionId = '';
+  learningManagedSection = false;
+  learningCourseId = '';
+
+  clearInterval(notificationTimer);
+
+  $('dialog').close();
+  $('content').replaceChildren();
+  $('nav').replaceChildren();
+  $('account').replaceChildren();
+
+  $('app').hidden = true;
+  $('auth').hidden = false;
+  $('auth-footer').hidden = false;
+  $('signout').hidden = true;
+  $('login-form').hidden = false;
+  $('change-form').hidden = true;
+
+  $('change-form').reset();
+  $('password').value = '';
+
+  $('auth-title').textContent = 'Welcome back';
+  $('auth-subtitle').textContent = 'Sign in to your QUALT account.';
+  $('auth-message').textContent = message;
+
+  window.dispatchEvent(new CustomEvent('qualt:logout'));
+}
+
+$('signout').onclick = () => signOut();
+
+async function authenticate(email, password) {
+  const data = await request(
+    '/api/auth/login/',
+    'POST',
+    { email, password },
+    false
+  );
+
+  if (!data?.access || !data.refresh || !data.user) {
+    throw new Error(UNAVAILABLE);
+  }
+
+  return data;
+}
+
+$('login-form').onsubmit = async event => {
+  event.preventDefault();
+
+  const submit = event.submitter;
+  if (submit.disabled) return;
+
+  submit.disabled = true;
+  $('auth-message').textContent = '';
+
+  const email = $('email').value.trim();
+  const password = $('password').value;
+  const stamp = epoch;
+
+  try {
+    const authenticated = await authenticate(email, password);
+    if (stamp !== epoch) return;
+
+    session = authenticated;
+    epoch++;
+
+    storage('qualt-email', $('remember').checked ? email : null);
+    $('password').value = '';
+
+    if (session.user.must_change_password) {
+      temporaryPassword = password;
+
+      $('login-form').hidden = true;
+      $('change-form').hidden = false;
+      $('auth-title').textContent = 'Change your password';
+      $('auth-subtitle').textContent =
+        'Please replace your temporary password to continue.';
+      $('signout').hidden = false;
+      $('new-password').focus();
+    } else {
+      await start();
+    }
+  } catch (error) {
+    signOut(
+      error.status === 401
+        ? 'The email or password is incorrect.'
+        : error.message
+    );
+  } finally {
+    submit.disabled = false;
+  }
+};
+
+$('change-form').onsubmit = async event => {
+  event.preventDefault();
+
+  const submit = event.submitter;
+  const newPassword = $('new-password').value;
+
+  if (submit.disabled) return;
+
+  if (newPassword !== $('confirm-password').value) {
+    $('auth-message').textContent = 'The passwords do not match.';
+    return;
+  }
+
+  submit.disabled = true;
+
+  let changed = false;
+  const stamp = epoch;
+
+  try {
+    await request('/api/auth/change-password/', 'POST', {
+      old_password: temporaryPassword,
+      new_password: newPassword
+    });
+
+    changed = true;
+    temporaryPassword = '';
+
+    const authenticated = await authenticate(
+      session.user.email,
+      newPassword
+    );
+
+    if (!current(stamp)) return;
+
+    session = authenticated;
+    $('change-form').reset();
+    await start();
+  } catch (error) {
+    if (changed) {
+      signOut(
+        'Your password was updated. Please sign in with your new password.'
+      );
+    } else {
+      $('auth-message').textContent = error.message;
+    }
+  } finally {
+    submit.disabled = false;
+  }
+};
+
+async function start() {
+  session.user = await request('/api/auth/me/');
+
+  if (session.user.must_change_password) {
+    signOut('Please sign in and change your temporary password.');
+    return;
+  }
+
+  $('auth').hidden = true;
+  $('auth-footer').hidden = true;
+  $('app').hidden = false;
+  $('signout').hidden = false;
+
+  buildNav();
+  await go('overview');
+
+  window.dispatchEvent(
+    new CustomEvent('qualt:login', { detail: session })
+  );
+}
+
+const pages = {};
+
+function buildNav() {
+  const groups = [
+    {
+      label: 'General',
+      items: [
+        ['overview', 'Overview'],
+        ['announcements', 'Announcements'],
+        ['catalog', 'Course catalog']
+      ]
+    }
+  ];
+
+  const termItems = [];
+  if (is('STUDENT')) {
+    termItems.push(
+      ['registration', 'Course registration'],
+      ['schedule', 'Weekly schedule'],
+      ['library', 'Library'],
+      ['grades', 'Grades']
+    );
+  }
+  if (is('INSTRUCTOR', 'HEAD')) {
+    termItems.push(
+      ['teaching', 'My teaching'],
+      ['advisor', 'Advisor review'],
+      ['grades', 'Grades']
+    );
+  }
+  if (termItems.length) {
+    groups.push({ label: 'Course and term operations', items: termItems });
+  }
+
+  groups.push({
+    label: 'Academic',
+    items: [
+      ['outcomes', 'Program outcomes'],
+      ['learningOutcomes', 'Learning outcomes']
+    ]
+  });
+
+  groups.push({
+    label: 'Forms and feedback',
+    items: [
+      ['feedback', 'Private feedback'],
+      ['sharing', 'Sharing permissions'],
+      ['discussions', 'Discussions'],
+      ['notifications', 'Notifications']
+    ]
+  });
+
+  const managementItems = [];
+  if (is('HEAD', 'ADMIN')) managementItems.push(['management', 'Academic management']);
+  if (is('ADMIN')) {
+    managementItems.push(
+      ['libraryAdmin', 'Library management'],
+      ['users', 'User accounts']
+    );
+  }
+  if (managementItems.length) {
+    groups.push({ label: 'Management', items: managementItems });
+  }
+
+  groups.push({
+    label: 'Account',
+    items: [['profile', 'My account']]
+  });
+
+  $('nav').replaceChildren();
+
+  groups.forEach((group, index) => {
+    const wrapper = node('section', 'nav-group');
+    const items = node('div', 'nav-group-items');
+    const itemsId = `nav-group-${index}`;
+    items.id = itemsId;
+
+    const toggle = button(
+      wrapper,
+      group.label,
+      () => {
+        const collapsed = toggle.getAttribute('aria-expanded') === 'true';
+        toggle.setAttribute('aria-expanded', String(!collapsed));
+        items.hidden = collapsed;
+      },
+      'nav-group-toggle'
+    );
+    toggle.setAttribute('aria-expanded', 'true');
+    toggle.setAttribute('aria-controls', itemsId);
+    add(wrapper, items);
+
+    group.items.forEach(([id, itemLabel]) => {
+      const control = button(items, itemLabel, () => go(id));
+      control.dataset.page = id;
+    });
+
+    add($('nav'), wrapper);
+  });
+
+  $('account').textContent =
+    person(session.user) + ' · ' + human(session.user.role);
+}
+
+async function go(id) {
+  if (!session) return;
+
+  route = id;
+  const version = ++navigation;
+
+  clearInterval(notificationTimer);
+
+  document.querySelectorAll('#nav button').forEach(control => {
+    control.setAttribute(
+      'aria-current',
+      control.dataset.page === id ? 'page' : 'false'
+    );
+  });
+
+  const parent = node('div');
+  $('content').replaceChildren(parent);
+
+  text(parent, 'Loading…', 'muted');
+  $('content').setAttribute('aria-busy', 'true');
+
+  try {
+    await pages[id](parent);
+  } catch (error) {
+    if (version !== navigation) return;
+
+    parent.replaceChildren();
+    errorBox(parent, error);
+    button(parent, 'Try again', () => go(id));
+  } finally {
+    if (version === navigation) {
+      $('content').setAttribute('aria-busy', 'false');
+    }
+  }
+}
+
+function heading(parent, title, subtitle) {
+  parent.replaceChildren();
+
+  const head = node('div', 'page-head');
+  add(head, node('h1', '', title));
+
+  if (subtitle) text(head, subtitle, 'muted');
+
+  add(parent, head);
+  return head;
+}
+
+async function ensureTerms() {
+  if (!terms.length) terms = await all('/api/courses/terms/');
+
+  if (!selectedTerm && terms.length) {
+    const now = Date.now();
+
+    selectedTerm = String(
+      (
+        terms.find(term =>
+          new Date(term.registration_start) <= now &&
+          now < new Date(term.add_drop_end)
+        ) || terms[0]
+      ).id
+    );
+  }
+
+  return terms;
+}
+
+async function termPicker(parent, onChange) {
+  await ensureTerms();
+
+  if (!terms.length) {
+    empty(parent, 'No academic terms have been published yet.');
+    return false;
+  }
+
+  const bar = node('div', 'toolbar');
+  const control = inputField(
+    bar,
+    choice('term', 'Academic term', termOptions()),
+    selectedTerm
+  );
+
+  control.input.onchange = () => {
+    selectedTerm = control.input.value;
+    onChange();
+  };
+
+  add(parent, bar);
+  return !!selectedTerm;
+}
+
+function tabs(parent, items, selected, change) {
+  const bar = node('div', 'row tabs');
+
+  items.forEach(([id, label]) => {
+    const control = button(bar, label, () => change(id));
+    control.setAttribute('aria-pressed', String(id === selected));
+  });
+
+  add(parent, bar);
+}
+
+const termQuery = () => '?term=' + encodeURIComponent(selectedTerm);
+
+const termName = id => {
+  const term = terms.find(item => item.id === Number(id));
+  return term
+    ? `${term.year} ${human(term.season)}`
+    : `Term ${id}`;
+};
+
+pages.overview = async parent => {
+  heading(
+    parent,
+    `Welcome, ${session.user.first_name || 'back'}.`,
+    'Your academic life, in one place.'
+  );
+
+  const grid = node('div', 'grid');
+  add(parent, grid);
+
+  const links = is('STUDENT')
+    ? [
+        [
+          'registration',
+          'Plan your term',
+          'Review your course plan and submit your selections.'
+        ],
+        [
+          'schedule',
+          'Your weekly schedule',
+          'View the latest schedule approved by your advisor.'
+        ],
+        [
+          'library',
+          'A place to study',
+          'Check study room availability and manage reservations.'
+        ]
+      ]
+    : [
+        [
+          'catalog',
+          'Course catalog',
+          'Browse current course offerings.'
+        ],
+        [
+          'feedback',
+          'Private conversations',
+          'Read feedback and respond to your students.'
+        ],
+        [
+          'announcements',
+          'Campus notices',
+          'Stay connected with the campus community.'
+        ]
+      ];
+
+  links.forEach(([id, title, description]) => {
+    const section = card(grid, title);
+    text(section, description, 'muted');
+    button(section, 'Open', () => go(id));
+  });
+
+  const notices = card(parent, 'Official announcements');
+
+  await paged(
+    notices,
+    '/api/announcements/official/?page_size=3',
+    (list, item) => postCard(list, item, 'official', false)
+  );
+};
+
+function postFields() {
+  return [
+    F('title', 'Title', 'text', { max: 200 }),
+    F('body', 'Message', 'textarea', { max: 10000 }),
+    choice(
+      'status',
+      'Publication status',
+      ['DRAFT', 'PUBLISHED', 'ARCHIVED'],
+      { value: 'DRAFT' }
+    )
+  ];
+}
+
+function postCard(parent, announcement, channel, manage = true) {
+  const section = card(parent, announcement.title);
+
+  add(section, badge(announcement.status));
+
+  text(
+    section,
+    `${announcement.author_name} · ${
+      date(announcement.published_at || announcement.created_at)
+    }`,
+    'muted'
+  );
+
+  text(section, announcement.body, 'copy');
+
+  if (manage && announcement.can_edit) {
+    button(section, 'Edit post', () => editor(
+      'Edit announcement',
+      postFields(),
+      announcement,
+      values => request(
+        `/api/announcements/${channel}/${announcement.id}/`,
+        'PATCH',
+        values
+      )
+    ));
+  }
+}
+
+pages.announcements = async parent => {
+  heading(
+    parent,
+    'Announcements',
+    'Official notices and student conversations, kept separate.'
+  );
+
+  tabs(
+    parent,
+    [
+      ['official', 'Official'],
+      ['student', 'Student community'],
+      ['mine', 'My posts']
+    ],
+    announcementTab,
+    value => {
+      announcementTab = value;
+      return go('announcements');
+    }
+  );
+
+  const channel = announcementTab === 'mine'
+    ? is('STUDENT') ? 'student' : 'official'
+    : announcementTab;
+
+  if (
+    announcementTab === 'mine' ||
+    (
+      channel === 'student'
+        ? is('STUDENT')
+        : is('INSTRUCTOR', 'HEAD', 'ADMIN')
+    )
+  ) {
+    button(
+      parent,
+      'New announcement',
+      () => editor(
+        'New announcement',
+        postFields(),
+        {},
+        values => request(
+          `/api/announcements/${channel}/`,
+          'POST',
+          values
+        )
+      ),
+      'primary'
+    );
+  }
+
+  await paged(
+    parent,
+    `/api/announcements/${channel}/${
+      announcementTab === 'mine' ? 'mine/' : ''
+    }`,
+    (list, announcement) => postCard(list, announcement, channel)
+  );
+};
+
+function sectionCard(parent, section, action) {
+  const box = card(
+    parent,
+    `${section.course.code} · ${section.course.name}`
+  );
+
+  text(
+    box,
+    `${human(section.course.kind)} · Section ${section.number} · ` +
+    `${section.course.credit} credits · ${section.course.ects} ECTS`,
+    'muted'
+  );
+
+  text(
+    box,
+    `${person(section.instructor)} · ` +
+    `${Math.max(0, section.quota - section.seats_taken)} ` +
+    `of ${section.quota} seats available`
+  );
+
+  text(
+    box,
+    section.meeting_times.map(meeting =>
+      `${dayNames[meeting.weekday]} ` +
+      `${meeting.start_time.slice(0, 5)}–${meeting.end_time.slice(0, 5)}` +
+      (meeting.room ? ' · ' + meeting.room : '')
+    ).join('\n') || 'Meeting times have not been set.',
+    'copy'
+  );
+
+  if (action) action(box, section);
+
+  return box;
+}
+
+pages.catalog = async parent => {
+  heading(
+    parent,
+    'Course catalog',
+    'Explore sections, instructors and meeting times.'
+  );
+
+  if (!await termPicker(parent, () => go('catalog'))) return;
+
+  const form = node('form', 'toolbar');
+  const search = inputField(form, opt('search', 'Search courses'));
+  const submit = node('button', 'primary', 'Search');
+  submit.type = 'submit';
+
+  add(form, submit);
+  add(parent, form);
+
+  const results = node('div');
+  add(parent, results);
+
+  let version = 0;
+
+  const load = async () => {
+    const own = ++version;
+    const holder = node('div');
+
+    results.replaceChildren(holder);
+
+    await paged(
+      holder,
+      '/api/courses/sections/' + termQuery() +
+      '&search=' + encodeURIComponent(search.input.value),
+      (list, section) => sectionCard(list, section)
+    );
+
+    if (own !== version) holder.remove();
+  };
+
+  form.onsubmit = event => {
+    event.preventDefault();
+    load();
+  };
+
+  await load();
+};
+
+pages.registration = async parent => {
+  heading(
+    parent,
+    'Course registration',
+    'Build your course selection and send it to your advisor.'
+  );
+
+  if (!await termPicker(parent, () => go('registration'))) return;
+
+  const results = await Promise.allSettled([
+    request('/api/courses/my-plan/' + termQuery()),
+    request('/api/registration/retakes/' + termQuery()),
+    all('/api/registration/mine/' + termQuery())
+  ]);
+
+  const plan = results[0].status === 'fulfilled'
+    ? results[0].value
+    : null;
+
+  const retakes = results[1].status === 'fulfilled'
+    ? results[1].value
+    : [];
+
+  const forms = results[2].status === 'fulfilled'
+    ? results[2].value
+    : [];
+
+  results.forEach(result => {
+    if (result.status === 'rejected') errorBox(parent, result.reason);
+  });
+
+  const term = terms.find(item => String(item.id) === selectedTerm);
+  const now = Date.now();
+
+  const open =
+    (
+      new Date(term.registration_start) <= now &&
+      now < new Date(term.registration_end)
+    ) ||
+    (
+      new Date(term.add_drop_start) <= now &&
+      now < new Date(term.add_drop_end)
+    );
+
+  text(
+    parent,
+    `Registration: ${date(term.registration_start)} – ${
+      date(term.registration_end)
+    }\nAdd/drop: ${date(term.add_drop_start)} – ${
+      date(term.add_drop_end)
+    }`,
+    'notice copy'
+  );
+
+  if (!open) {
+    text(parent, 'Course registration is currently closed.', 'notice');
+  }
+
+  if (plan) {
+    const section = card(parent, 'Your term plan');
+
+    text(
+      section,
+      `Year ${plan.class_year} · ` +
+      `Choose ${plan.elective_count} elective course(s).`
+    );
+
+    table(
+      section,
+      ['Mandatory course', 'Prerequisites'],
+      plan.mandatory_courses.map(course => [
+        `${course.code} · ${course.name}`,
+        course.missing_prerequisites.length
+          ? 'Complete: ' + course.missing_prerequisites.join(', ')
+          : 'Met'
+      ])
+    );
+
+    text(
+      section,
+      'Offered electives: ' +
+      (plan.elective_options.map(course => course.code).join(', ') || 'None'),
+      'muted'
+    );
+  }
+
+  if (retakes.length) {
+    const section = card(parent, 'Retake courses');
+
+    table(
+      section,
+      ['Course', 'Requirement'],
+      retakes.map(course => [
+        course.code + ' · ' + course.name,
+        course.required
+          ? 'Required this term'
+          : 'No section currently required'
+      ])
+    );
+
+    text(
+      section,
+      'Retakes do not count toward credit limits. ' +
+      'Review any timetable conflicts with your instructor.',
+      'muted'
+    );
+  }
+
+  const form = forms[0];
+
+  if (form) {
+    const section = card(parent, 'Your selection');
+
+    add(section, badge(form.status));
+
+    text(
+      section,
+      `${form.counted_credit}/${term.max_credit} counted credits · ` +
+      `${form.counted_ects}/${term.max_ects} counted ECTS · ` +
+      `Total: ${form.total_credit} credits / ${form.total_ects} ECTS`
+    );
+
+    if (form.advisor_note) {
+      text(section, 'Advisor note: ' + form.advisor_note, 'notice');
+    }
+
+    table(
+      section,
+      ['Course', 'Section', 'Notes', ''],
+      form.items.map(item => {
+        const actions = node('div');
+
+        if (open) {
+          button(actions, 'Remove', () => confirmAction(
+            'Remove course?',
+            `${item.section.course.code} will be removed. ` +
+            'Changes require a new advisor approval.',
+            () => request(
+              `/api/registration/items/${item.id}/`,
+              'DELETE'
+            )
+          ));
+        }
+
+        return [
+          item.section.course.code,
+          item.section.number,
+          [
+            item.is_retake ? 'Retake' : '',
+            item.conflicts_with.length
+              ? 'Conflicts: ' + item.conflicts_with.join(', ')
+              : ''
+          ].filter(Boolean).join(' · '),
+          actions
+        ];
+      })
+    );
+
+    if (open && ['DRAFT', 'RETURNED'].includes(form.status)) {
+      button(
+        section,
+        'Submit to advisor',
+        () => confirmAction(
+          'Submit registration?',
+          'Send this course selection to your advisor for approval.',
+          () => request(
+            `/api/registration/${form.id}/submit/`,
+            'POST',
+            {}
+          )
+        ),
+        'primary'
+      );
+    }
+  } else {
+    empty(parent, 'You have not selected any courses for this term.');
+  }
+
+  if (plan) {
+    const allowed = new Set(
+      [
+        ...plan.mandatory_courses,
+        ...plan.elective_options,
+        ...retakes
+      ].map(course => course.id)
+    );
+
+    const section = card(parent, 'Available sections');
+
+    await paged(
+      section,
+      '/api/courses/sections/' + termQuery(),
+      (list, courseSection) => {
+        if (!allowed.has(courseSection.course.id)) return;
+
+        sectionCard(list, courseSection, (box, item) => {
+          const alreadyAdded = form?.items.some(
+            selection => selection.section.course.id === item.course.id
+          );
+
+          const control = button(
+            box,
+            alreadyAdded ? 'Already selected' : 'Add course',
+            () => request('/api/registration/items/', 'POST', {
+              section: item.id
+            }).then(() => go('registration')),
+            'primary'
+          );
+
+          control.disabled =
+            !!alreadyAdded ||
+            !open ||
+            item.seats_taken >= item.quota;
+        });
+      }
+    );
+  }
+};
+
+pages.schedule = async parent => {
+  heading(
+    parent,
+    'Weekly schedule',
+    'Your most recently approved course selection.'
+  );
+
+  if (!await termPicker(parent, () => go('schedule'))) return;
+
+  let data;
+
+  try {
+    data = await request('/api/registration/schedule/' + termQuery());
+  } catch (error) {
+    if (error.status === 404) {
+      empty(parent, error.message);
+      return;
+    }
+    throw error;
+  }
+
+  if (data.has_pending_changes) {
+    text(
+      parent,
+      'Changes are awaiting approval. ' +
+      'This schedule shows your last approved selection.',
+      'notice'
+    );
+  }
+
+  text(parent, 'Approved ' + date(data.approved_at), 'muted');
+
+  data.days.forEach(day => {
+    const section = card(parent, day.name);
+
+    table(
+      section,
+      ['Time', 'Course', 'Room', 'Instructor', 'Notes'],
+      day.slots.map(slot => [
+        slot.start_time.slice(0, 5) + '–' + slot.end_time.slice(0, 5),
+        slot.course.code + ' · ' + slot.course.name,
+        slot.room || '—',
+        slot.instructor || '—',
+        [
+          slot.is_retake ? 'Retake' : '',
+          slot.conflicts_with.length
+            ? 'Conflicts: ' + slot.conflicts_with.join(', ')
+            : ''
+        ].filter(Boolean).join(' · ')
+      ])
+    );
+  });
+
+  if (!data.days.length) empty(parent, 'No meeting times are available.');
+
+  if (data.unscheduled.length) {
+    text(
+      parent,
+      'Times pending: ' + data.unscheduled.join(', '),
+      'notice'
+    );
+  }
+};
+
+pages.teaching = async parent => {
+  heading(parent, 'My teaching', 'Your sections and student lists.');
+
+  if (!await termPicker(parent, () => go('teaching'))) return;
+
+  await paged(
+    parent,
+    '/api/courses/my-sections/' + termQuery(),
+    (list, section) => sectionCard(
+      list,
+      section,
+      (box, item) => button(
+        box,
+        'View students',
+        () => roster(
+          `/api/courses/my-sections/${item.id}/students/`,
+          item.course.code
+        )
+      )
+    )
+  );
+};
+
+async function roster(path, title) {
+  const parent = modal(title + ' · Student list');
+
+  await paged(parent, path, (list, student) => {
+    const section = card(list, person(student));
+
+    text(
+      section,
+      `${student.student_no || '—'} · ` +
+      `Year ${student.class_year ?? '—'} · ` +
+      human(student.registration_status) +
+      (student.is_retake ? ' · Retake' : '')
+    );
+
+    text(section, student.email, 'muted');
+  });
+}
+
+pages.advisor = async parent => {
+  heading(
+    parent,
+    'Advisor review',
+    'Review course selections from your assigned students.'
+  );
+
+  if (!await termPicker(parent, () => go('advisor'))) return;
+
+  const students = card(parent, 'Your advisees');
+
+  await paged(
+    students,
+    '/api/registration/advisor/students/' + termQuery(),
+    (list, student) => {
+      const section = card(list, person(student));
+
+      text(
+        section,
+        `${student.student_no || '—'} · ` +
+        `Year ${student.class_year ?? '—'} · ` +
+        (
+          student.registration
+            ? human(student.registration.status)
+            : 'Not started'
+        )
+      );
+    }
+  );
+
+  const forms = card(parent, 'Registration forms');
+
+  await paged(
+    forms,
+    '/api/registration/advisor/' + termQuery(),
+    (list, registration) => {
+      const section = card(list, person(registration.student));
+
+      add(section, badge(registration.status));
+
+      text(
+        section,
+        `${registration.counted_credit} counted credits · ` +
+        `${registration.counted_ects} counted ECTS`
+      );
+
+      table(
+        section,
+        ['Course', 'Section', 'Notes'],
+        registration.items.map(item => [
+          item.section.course.code,
+          item.section.number,
+          [
+            item.is_retake ? 'Retake' : '',
+            item.conflicts_with.length
+              ? 'Conflicts: ' + item.conflicts_with.join(', ')
+              : ''
+          ].filter(Boolean).join(' · ')
+        ])
+      );
+
+      if (registration.advisor_note) {
+        text(section, registration.advisor_note, 'notice');
+      }
+
+      if (registration.status === 'SUBMITTED') {
+        const actions = row(section);
+
+        ['approve', 'return'].forEach(action => {
+          button(
+            actions,
+            action === 'approve' ? 'Approve' : 'Return for changes',
+            () => editor(
+              action === 'approve'
+                ? 'Approve registration'
+                : 'Return registration',
+              [
+                F('note', 'Note to student', 'textarea', {
+                  required: action === 'return',
+                  max: 2000
+                })
+              ],
+              {},
+              values => request(
+                `/api/registration/advisor/${registration.id}/${action}/`,
+                'POST',
+                values
+              ),
+              {
+                submit: action === 'approve' ? 'Approve' : 'Return'
+              }
+            )
+          );
+        });
+      }
+    }
+  );
+};
+
+const istanbulTime = value =>
+  new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/Istanbul',
+    hour: '2-digit',
+    minute: '2-digit'
+  }).format(new Date(value));
+
+const istanbulDate = value =>
+  new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Europe/Istanbul',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).format(new Date(value));
+
+pages.library = async parent => {
+  heading(
+    parent,
+    'Library',
+    'Reserve a study room. Booking times are shown in Istanbul time.'
+  );
+
+  const [summary, rooms] = await Promise.all([
+    request('/api/library/summary/'),
+    all('/api/library/rooms/')
+  ]);
+
+  const allowance = card(parent, 'Your booking allowance');
+
+  text(
+    allowance,
+    `${summary.weekly_remaining} of ${summary.weekly_limit} ` +
+    `hours remaining this week · Daily limit: ${summary.daily_limit} hours`
+  );
+
+  if (summary.is_banned) {
+    text(
+      allowance,
+      'Reservations are restricted: ' + summary.ban_reason,
+      'message'
+    );
+  }
+
+  if (rooms.length) {
+    const form = node('form', 'toolbar');
+
+    const room = inputField(
+      form,
+      choice(
+        'room',
+        'Study room',
+        rooms.map(item => [
+          item.id,
+          item.name + (item.location ? ' · ' + item.location : '')
+        ])
+      ),
+      rooms[0].id
+    );
+
+    const day = inputField(
+      form,
+      F('date', 'Date', 'date'),
+      istanbulDate(summary.server_time)
+    );
+
+    day.input.min = istanbulDate(summary.window_start);
+    day.input.max = istanbulDate(
+      new Date(new Date(summary.window_end).getTime() - 1)
+    );
+
+    const submit = node('button', 'primary', 'Check availability');
+    submit.type = 'submit';
+
+    add(form, submit);
+    add(parent, form);
+
+    const slots = node('div');
+    add(parent, slots);
+
+    let lookup = 0;
+
+    const load = async () => {
+      const version = ++lookup;
+      submit.disabled = true;
+
+      const roomId = Number(room.input.value);
+      slots.replaceChildren();
+
+      try {
+        const data = await request(
+          `/api/library/availability/?room=${roomId}&date=${day.input.value}`
+        );
+
+        if (version !== lookup) return;
+
+        const grid = node('div', 'slots');
+        add(slots, grid);
+
+        data.slots.forEach(slot => {
+          const control = button(
+            grid,
+            istanbulTime(slot.starts_at) + '–' + istanbulTime(slot.ends_at),
+            () => confirmAction(
+              'Reserve this room?',
+              `${rooms.find(item => item.id === roomId)?.name} · ` +
+              `${istanbulDate(slot.starts_at)} · ` +
+              `${istanbulTime(slot.starts_at)}–${istanbulTime(slot.ends_at)} ` +
+              '(Istanbul time)',
+              () => request('/api/library/reservations/', 'POST', {
+                room: roomId,
+                starts_at: slot.starts_at
+              })
+            )
+          );
+
+          add(
+            control,
+            node(
+              'small',
+              '',
+              slot.available ? 'Available' : human(slot.unavailable_reason)
+            )
+          );
+
+          control.disabled = !slot.available;
+        });
+      } catch (error) {
+        if (version === lookup) errorBox(slots, error);
+      } finally {
+        if (version === lookup) submit.disabled = false;
+      }
+    };
+
+    form.onsubmit = event => {
+      event.preventDefault();
+      load();
+    };
+
+    await load();
+  } else {
+    empty(parent, 'No study rooms are currently available.');
+  }
+
+  const mine = card(parent, 'My reservations');
+
+  tabs(
+    mine,
+    [['upcoming', 'Upcoming'], ['history', 'History']],
+    libraryPeriod,
+    value => {
+      libraryPeriod = value;
+      return go('library');
+    }
+  );
+
+  await paged(
+    mine,
+    '/api/library/reservations/mine/?period=' + libraryPeriod,
+    (list, reservation) => {
+      const box = card(list, reservation.room_name);
+
+      text(
+        box,
+        `${istanbulDate(reservation.starts_at)} · ` +
+        `${istanbulTime(reservation.starts_at)}–` +
+        `${istanbulTime(reservation.ends_at)} (Istanbul time)`
+      );
+
+      add(box, badge(reservation.status));
+
+      if (reservation.cancellation_reason) {
+        text(box, reservation.cancellation_reason, 'muted');
+      }
+
+      if (reservation.can_cancel) {
+        button(box, 'Cancel reservation', () => editor(
+          'Cancel reservation',
+          [opt('reason', 'Reason', 'textarea', { max: 500 })],
+          {},
+          values => request(
+            `/api/library/reservations/${reservation.id}/cancel/`,
+            'POST',
+            values
+          ),
+          { submit: 'Cancel reservation' }
+        ));
+      }
+    }
+  );
+};
+
+const outcomeFields = (outcome = {}) => [
+  ...(is('ADMIN') && !outcome.department ? [choice(
+    'department', 'Department', departmentOptions(), { numeric: true }
+  )] : []),
+  F('code', 'Code', 'text', {
+    max: 16,
+    help: 'For example, PO1 or PO12.'
+  }),
+  F('title', 'Title', 'text', { max: 200 }),
+  F('description', 'Description', 'textarea', { max: 4000 }),
+  num('display_order', 'Display order', { min: 1, value: 1 }),
+  check('is_active', 'Active', true)
+];
+
+pages.outcomes = async parent => {
+  if (is('ADMIN')) departments = await all('/api/departments/');
+
+  heading(
+    parent,
+    'Program outcomes',
+    'The knowledge and skills your program aims to develop.'
+  );
+
+  if (is('HEAD', 'ADMIN')) {
+    button(
+      parent,
+      'Add outcome',
+      () => editor(
+        'New program outcome',
+        outcomeFields(),
+        {},
+        values => request('/api/program-outcomes/', 'POST', values)
+      ),
+      'primary'
+    );
+  }
+
+  await paged(parent, '/api/program-outcomes/', (list, outcome) => {
+    const section = card(list, `${outcome.code} · ${outcome.title}`);
+
+    text(section, outcome.department_name || 'Awaiting department assignment', 'muted');
+    text(section, outcome.description, 'copy');
+
+    if (!outcome.is_active) add(section, badge('Inactive'));
+
+    if (is('HEAD', 'ADMIN')) {
+      button(section, 'Edit', () => editor(
+        'Edit program outcome',
+        outcomeFields(outcome),
+        outcome,
+        values => request(
+          `/api/program-outcomes/${outcome.id}/`,
+          'PATCH',
+          values
+        )
+      ));
+    }
+  });
+};
+
+const AUDIT =
+  'Administrators can access feedback, identities, replies and sharing ' +
+  'history for audit purposes, including withdrawn records. ' +
+  'Anonymous feedback is not anonymous to administrators.';
+
+pages.feedback = async parent => {
+  heading(
+    parent,
+    'Private feedback',
+    'Conversations with instructors and department heads.'
+  );
+
+  text(parent, AUDIT, 'notice');
+
+  if (is('STUDENT')) {
+    button(
+      parent,
+      'New feedback',
+      async () => {
+        const instructors = await all('/api/feedback/instructors/');
+
+        editor(
+          'New private feedback',
+          [
+            F('title', 'Title', 'text', { max: 200 }),
+            F('body', 'Your feedback', 'textarea', { max: 5000 }),
+            choice(
+              'audience',
+              'Send to',
+              [
+                ['INSTRUCTOR', 'Selected instructor'],
+                ['HEAD', 'Department heads'],
+                ['BOTH', 'Instructor and department heads']
+              ],
+              { value: 'INSTRUCTOR' }
+            ),
+            choice(
+              'instructor',
+              'Instructor',
+              instructors.map(instructor => [
+                instructor.id,
+                instructor.name || 'Instructor ' + instructor.id
+              ]),
+              { numeric: true, required: false }
+            ),
+            check('is_anonymous', 'Hide my identity from recipients', true)
+          ],
+          {},
+          values => request('/api/feedback/items/', 'POST', values),
+          {
+            notice:
+              AUDIT +
+              ' HEAD feedback is currently visible to all department heads.',
+            submit: 'Send feedback',
+            setup: controls => {
+              const update = () => {
+                const heads = controls.audience.input.value === 'HEAD';
+                controls.instructor.input.disabled = heads;
+                controls.instructor.input.required = !heads;
+                if (heads) controls.instructor.input.value = '';
+              };
+
+              controls.audience.input.onchange = update;
+              update();
+            },
+            validate: values => {
+              if (values.audience === 'HEAD') values.instructor = null;
+            }
+          }
+        );
+      },
+      'primary'
+    );
+  }
+
+  await paged(parent, '/api/feedback/items/', (list, feedback) => {
+    const section = card(list, feedback.title);
+
+    text(
+      section,
+      `${feedback.student.name} · ${human(feedback.audience)} · ` +
+      date(feedback.created_at),
+      'muted'
+    );
+
+    if (feedback.deleted_at) {
+      add(section, badge('Withdrawn · audit record'));
+    }
+
+    text(section, feedback.body, 'copy');
+
+    button(
+      section,
+      'Open conversation',
+      () => feedbackDetail(feedback.id)
+    );
+  });
+};
+
+async function feedbackDetail(id) {
+  const parent = modal('Private conversation');
+  const feedback = await request(`/api/feedback/items/${id}/`);
+
+  text(parent, feedback.department_name || 'Awaiting department assignment', 'notice');
+  if (is('ADMIN') && !feedback.department) {
+    button(parent, 'Assign department', async () => {
+      departments = await all('/api/departments/');
+      editor('Assign legacy feedback', [choice(
+        'department', 'Department', departmentOptions(), { numeric: true }
+      )], {}, values => request(`/api/feedback/items/${id}/`, 'PATCH', values));
+    });
+  }
+
+  add(parent, node('h3', '', feedback.title));
+  text(parent, feedback.body, 'copy');
+
+  text(
+    parent,
+    `${feedback.student.name} · ${human(feedback.audience)} · ` +
+    date(feedback.created_at),
+    'muted'
+  );
+
+  if (feedback.deleted_at) {
+    text(
+      parent,
+      'This feedback was withdrawn. This is an audit record.',
+      'notice'
+    );
+  }
+
+  const replies = card(parent, 'Replies');
+
+  await paged(
+    replies,
+    `/api/feedback/items/${id}/replies/`,
+    (list, reply) => {
+      const section = card(list, reply.author.name);
+      text(section, reply.body, 'copy');
+      text(section, date(reply.created_at), 'muted');
+    }
+  );
+
+  if (!feedback.deleted_at) {
+    const actions = row(parent);
+
+    button(actions, 'Reply', () => editor(
+      'Private reply',
+      [F('body', 'Message', 'textarea', { max: 3000 })],
+      {},
+      values => request(
+        `/api/feedback/items/${id}/replies/`,
+        'POST',
+        values
+      ),
+      {
+        submit: 'Send reply',
+        after: () => feedbackDetail(id)
+      }
+    ));
+
+    if (is('STUDENT') && feedback.student.id === session.user.id) {
+      button(
+        actions,
+        'Withdraw feedback',
+        () => confirmAction(
+          'Withdraw feedback?',
+          'This removes normal access and withdraws any sharing or ' +
+          'discussion. Administrators retain the audit history.',
+          () => request(`/api/feedback/items/${id}/`, 'DELETE')
+        ),
+        'danger'
+      );
+    }
+
+    if (is('INSTRUCTOR', 'HEAD') && feedback.instructor === session.user.id) {
+      button(
+        actions,
+        'Request sharing permission',
+        () => sharingEditor(id)
+      );
+    }
+  }
+}
+
+const conditions = [
+  ['visible_to_students', 'Visible to students in this department'],
+  ['visible_to_heads', 'Visible to heads of this department'],
+  ['reveal_identity', 'Reveal the original student’s identity'],
+  ['show_results_to_students', 'Show poll results to students'],
+  [
+    'show_comments_to_students',
+    'Show other students’ comments to students'
+  ]
+];
+
+function conditionFields() {
+  return conditions.map(([key, label]) => check(
+    key,
+    label,
+    key === 'visible_to_students' ||
+    key === 'show_comments_to_students'
+  ));
+}
+
+function showConditions(parent, data, title) {
+  const section = card(parent, title);
+
+  table(
+    section,
+    ['Permission', 'Setting'],
+    conditions.map(([key, label]) => [
+      label,
+      data?.[key] ? 'Yes' : 'No'
+    ])
+  );
+}
+
+function sharingEditor(id) {
+  editor(
+    'Request permission to share',
+    [
+      opt('introduction', 'Your introduction', 'textarea', { max: 3000 }),
+      ...conditionFields(),
+      opt('poll_question', 'Poll question (optional)', 'text', { max: 300 }),
+      opt('poll_options', 'Poll options, one per line', 'lines', {
+        help: 'Use 2–10 distinct options if you add a poll.'
+      }),
+      opt('poll_closes_at', 'Poll closes at', 'datetime', {
+        help: 'Your device’s local time.'
+      })
+    ],
+    {},
+    values => request(
+      `/api/feedback/items/${id}/sharing-request/`,
+      'POST',
+      values
+    ),
+    {
+      notice:
+        AUDIT +
+        ' The original feedback is shared only after the student agrees ' +
+        'and you accept their conditions. Private replies are never shared.',
+      submit: 'Request permission'
+    }
+  );
+}
+
+pages.sharing = async parent => {
+  heading(
+    parent,
+    'Sharing permissions',
+    'Review the exact content and audience before agreeing.'
+  );
+
+  text(parent, AUDIT, 'notice');
+
+  await paged(
+    parent,
+    '/api/feedback/sharing-requests/',
+    (list, proposal) => {
+      const section = card(list, proposal.feedback_title);
+
+      add(section, badge(proposal.state));
+
+      text(
+        section,
+        `${proposal.student.name} · ${date(proposal.created_at)}`,
+        'muted'
+      );
+
+      button(section, 'Review proposal', () => sharingDetail(proposal.id));
+    }
+  );
+};
+
+async function sharingDetail(id) {
+  const parent = modal('Sharing proposal');
+  const proposal = await request(`/api/feedback/sharing-requests/${id}/`);
+  text(parent, proposal.department_name || 'Awaiting department assignment', 'notice');
+
+  add(
+    parent,
+    node('h3', '', proposal.feedback_title),
+    badge(proposal.state)
+  );
+
+  text(parent, AUDIT, 'notice');
+
+  const original = card(parent, 'Original feedback');
+  text(original, proposal.feedback_body, 'copy');
+
+  const introduction = card(parent, 'Instructor introduction');
+  text(introduction, proposal.introduction || 'No introduction.', 'copy');
+
+  if (proposal.poll_question) {
+    const poll = card(parent, 'Proposed poll');
+
+    text(poll, proposal.poll_question);
+
+    proposal.poll_options.forEach((option, index) => {
+      text(poll, `${index + 1}. ${option}`);
+    });
+
+    text(poll, 'Closes ' + date(proposal.poll_closes_at), 'muted');
+  }
+
+  showConditions(
+    parent,
+    proposal.conditions,
+    proposal.state === 'PUBLISHED'
+      ? 'Published conditions'
+      : 'Instructor proposal'
+  );
+
+  if (proposal.student_conditions) {
+    showConditions(
+      parent,
+      proposal.student_conditions,
+      'Student’s accepted conditions'
+    );
+  }
+
+  const actions = row(parent);
+
+  if (
+    is('STUDENT') &&
+    proposal.student.id === session.user.id &&
+    proposal.state === 'PENDING'
+  ) {
+    button(actions, 'Reject', () => confirmAction(
+      'Reject sharing?',
+      'Your private conversation will remain available.',
+      () => request(
+        `/api/feedback/sharing-requests/${id}/respond/`,
+        'POST',
+        { action: 'reject' }
+      )
+    ));
+
+    button(actions, 'Approve', () => confirmAction(
+      'Approve this proposal?',
+      'Approve the exact original text, introduction, poll and permissions ' +
+      'shown above. The instructor must still publish it.',
+      () => request(
+        `/api/feedback/sharing-requests/${id}/respond/`,
+        'POST',
+        { action: 'approve' }
+      )
+    ));
+
+    button(actions, 'Propose conditions', () => editor(
+      'Your sharing conditions',
+      conditionFields(),
+      proposal.conditions,
+      values => request(
+        `/api/feedback/sharing-requests/${id}/respond/`,
+        'POST',
+        { action: 'counter', conditions: values }
+      ),
+      {
+        notice: AUDIT,
+        submit: 'Send conditions'
+      }
+    ));
+  }
+
+  if (
+    is('INSTRUCTOR', 'HEAD') &&
+    proposal.instructor === session.user.id &&
+    ['APPROVED', 'COUNTERED'].includes(proposal.state)
+  ) {
+    button(
+      actions,
+      'Accept conditions and publish',
+      () => confirmAction(
+        'Publish this discussion?',
+        'Publish using the student’s exact accepted conditions shown above.',
+        () => request(
+          `/api/feedback/sharing-requests/${id}/publish/`,
+          'POST',
+          { accept_conditions: true }
+        )
+      ),
+      'primary'
+    );
+  }
+
+  if (
+    (
+      is('STUDENT') && proposal.student.id === session.user.id ||
+      is('INSTRUCTOR', 'HEAD') && proposal.instructor === session.user.id
+    ) &&
+    ['PENDING', 'APPROVED', 'COUNTERED', 'PUBLISHED'].includes(proposal.state)
+  ) {
+    button(
+      actions,
+      'Withdraw sharing',
+      () => confirmAction(
+        'Withdraw sharing?',
+        'The discussion will no longer be shared and cannot be republished. ' +
+        'Private replies remain available. Administrators retain audit access.',
+        () => request(
+          `/api/feedback/sharing-requests/${id}/withdraw/`,
+          'POST',
+          {}
+        )
+      ),
+      'danger'
+    );
+  }
+}
+
+pages.discussions = async parent => {
+  heading(parent, 'Discussions', 'Feedback shared with permission.');
+
+  await paged(
+    parent,
+    '/api/feedback/discussions/',
+    (list, discussion) => {
+      const section = card(list, discussion.title);
+
+      text(
+        section,
+        `${discussion.instructor.name} · ${date(discussion.published_at)}`,
+        'muted'
+      );
+
+      text(
+        section,
+        discussion.introduction || discussion.original_feedback,
+        'copy'
+      );
+
+      if (discussion.state !== 'PUBLISHED') {
+        add(section, badge(discussion.state + ' · audit record'));
+      }
+
+      button(
+        section,
+        'Open discussion',
+        () => discussionDetail(discussion.id)
+      );
+    }
+  );
+};
+
+async function discussionDetail(id) {
+  const parent = modal('Discussion');
+  const discussion = await request(`/api/feedback/discussions/${id}/`);
+  text(parent, discussion.department_name || 'Awaiting department assignment', 'notice');
+
+  add(parent, node('h3', '', discussion.title));
+  text(parent, discussion.instructor.name, 'muted');
+
+  add(
+    parent,
+    node('blockquote', 'copy', discussion.original_feedback)
+  );
+
+  text(parent, discussion.introduction, 'copy');
+
+  showConditions(
+    parent,
+    discussion.conditions,
+    'Sharing permissions'
+  );
+
+  const poll = discussion.poll;
+
+  if (poll) {
+    const section = card(parent, poll.question);
+
+    text(
+      section,
+      `${poll.is_closed ? 'Closed' : 'Closes'} · ${date(poll.closes_at)}`,
+      'muted'
+    );
+
+    if (is('STUDENT')) {
+      text(
+        section,
+        'Your vote is visible to the requesting instructor and ' +
+        'administrators. Only the original feedback author’s identity ' +
+        'is hidden from the instructor when identity sharing is disabled.',
+        'notice'
+      );
+    }
+
+    poll.options.forEach(option => {
+      const line = row(section);
+
+      text(
+        line,
+        option.label +
+        (poll.my_option === option.index ? ' · Your vote' : '')
+      );
+
+      if (is('STUDENT') && !poll.is_closed) {
+        button(
+          line,
+          poll.my_option === option.index ? 'Selected' : 'Vote',
+          () => confirmAction(
+            'Submit your vote?',
+            option.label,
+            () => request(
+              `/api/feedback/discussions/${id}/vote/`,
+              'POST',
+              { option: option.index }
+            ),
+            () => discussionDetail(id)
+          )
+        );
+      }
+    });
+
+    if (poll.results) {
+      text(section, `${poll.results.total_votes} votes`);
+
+      poll.results.options.forEach(option => {
+        text(
+          section,
+          `${option.label}: ${option.votes} (${option.percentage}%)`
+        );
+
+        const progress = node('progress', 'progress');
+        progress.max = 100;
+        progress.value = option.percentage;
+        progress.setAttribute('aria-label', option.label);
+
+        add(section, progress);
+      });
+    } else {
+      text(section, 'Poll results are not shared with you.', 'muted');
+    }
+
+    if (
+      is('ADMIN') ||
+      is('INSTRUCTOR', 'HEAD') && discussion.instructor.id === session.user.id
+    ) {
+      button(section, 'View individual votes', async () => {
+        const box = modal('Individual votes');
+
+        await paged(
+          box,
+          `/api/feedback/discussions/${id}/votes/`,
+          (list, vote) => {
+            const entry = card(list, vote.student.name);
+
+            text(
+              entry,
+              (
+                poll.options.find(option => option.index === vote.option)
+                  ?.label || vote.option
+              ) +
+              ' · ' +
+              date(vote.updated_at)
+            );
+          }
+        );
+      });
+    }
+  }
+
+  const comments = card(parent, 'Comments');
+
+  await paged(
+    comments,
+    `/api/feedback/discussions/${id}/comments/`,
+    (list, comment) => {
+      const box = card(list, comment.author.name);
+      text(box, comment.body, 'copy');
+      text(box, date(comment.created_at), 'muted');
+    }
+  );
+
+  if (
+    discussion.state === 'PUBLISHED' &&
+    (
+      is('STUDENT') ||
+      is('INSTRUCTOR', 'HEAD') && discussion.instructor.id === session.user.id
+    )
+  ) {
+    button(parent, 'Add comment', () => editor(
+      'New comment',
+      [F('body', 'Comment', 'textarea', { max: 3000 })],
+      {},
+      values => request(
+        `/api/feedback/discussions/${id}/comments/`,
+        'POST',
+        values
+      ),
+      {
+        submit: 'Post comment',
+        after: () => discussionDetail(id)
+      }
+    ));
+  }
+}
+
+pages.notifications = async parent => {
+  heading(
+    parent,
+    'Notifications',
+    'Updates to your feedback and sharing requests.'
+  );
+
+  tabs(
+    parent,
+    [['all', 'All'], ['unread', 'Unread']],
+    notificationsUnread ? 'unread' : 'all',
+    value => {
+      notificationsUnread = value === 'unread';
+      return go('notifications');
+    }
+  );
+
+  const indicator = node('p', 'muted');
+  add(parent, indicator);
+
+  const stamp = epoch;
+
+  const update = async () => {
+    try {
+      const data = await request(
+        '/api/feedback/notifications/?unread=true&page_size=1'
+      );
+
+      if (current(stamp) && parent.isConnected) {
+        indicator.textContent = `${data.count} unread notification(s).`;
+      }
+    } catch {
+      if (parent.isConnected) {
+        indicator.textContent = 'Notifications could not be refreshed.';
+      }
+    }
+  };
+
+  await update();
+
+  if (parent.isConnected) {
+    notificationTimer = setInterval(update, 30000);
+  }
+
+  await paged(
+    parent,
+    '/api/feedback/notifications/' +
+    (notificationsUnread ? '?unread=true' : ''),
+    (list, notification) => {
+      const section = card(list, human(notification.event));
+
+      text(section, date(notification.created_at), 'muted');
+      add(section, badge(notification.is_read ? 'Read' : 'Unread'));
+
+      const actions = row(section);
+
+      if (notification.sharing_request) {
+        button(
+          actions,
+          'Open sharing request',
+          () => sharingDetail(notification.sharing_request)
+        );
+      }
+
+      if (notification.feedback) {
+        button(
+          actions,
+          'Open conversation',
+          () => feedbackDetail(notification.feedback)
+        );
+      }
+
+      if (!notification.is_read) {
+        button(
+          actions,
+          'Mark as read',
+          () => request(
+            `/api/feedback/notifications/${notification.id}/read/`,
+            'POST',
+            {}
+          ).then(() => go('notifications'))
+        );
+      }
+    }
+  );
+};
+
+function gradeStudentName(student) {
+  return [student.student_no, student.first_name, student.last_name]
+    .filter(Boolean)
+    .join(' - ') || student.email || 'Student';
+}
+
+const gradeComponentFields = () => [
+  choice('kind', 'Component type', [
+    'MIDTERM', 'FINAL', 'PROJECT', 'ASSIGNMENT', 'QUIZ', 'ATTENDANCE', 'OTHER'
+  ]),
+  F('name', 'Component name', 'text', { max: 120 }),
+  num('weight', 'Weight (%)', { min: 0, maxValue: 100 }),
+  num('max_score', 'Maximum score', { min: 0.01 }),
+  num('display_order', 'Display order', { min: 1, value: 1 })
+];
+
+async function downloadGradeTemplate(component) {
+  const response = await fetch(
+    API + `/api/grades/teaching/components/${component.id}/grades/template/`,
+    { headers: { Authorization: 'Bearer ' + session.access } }
+  );
+
+  if (response.status === 401) {
+    const tokens = await request(
+      '/api/auth/refresh/',
+      'POST',
+      { refresh: session.refresh },
+      false
+    );
+    session.access = tokens.access;
+    return downloadGradeTemplate(component);
+  }
+
+  if (!response.ok) throw new Error(UNAVAILABLE);
+
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const link = node('a');
+  link.href = url;
+  link.download = `${component.name || 'grades'}.csv`;
+  link.click();
+  URL.revokeObjectURL(url);
+}
+
+function gradeEntryEditor(component, sheet) {
+  const fields = sheet.students.map(student => F(
+    'student_' + student.id,
+    gradeStudentName(student),
+    'number',
+    {
+      required: false,
+      min: 0,
+      maxValue: Number(component.max_score),
+      help: 'Leave blank to remove this grade.'
+    }
+  ));
+
+  const initial = {};
+  sheet.students.forEach(student => {
+    initial['student_' + student.id] =
+      student.grades[String(component.id)] ?? '';
+  });
+
+  editor(
+    'Grades - ' + component.name,
+    fields,
+    initial,
+    values => request(
+      `/api/grades/teaching/components/${component.id}/grades/`,
+      'POST',
+      {
+        grades: sheet.students.map(student => ({
+          student: student.id,
+          score: values['student_' + student.id]
+        }))
+      }
+    ),
+    {
+      notice: `Enter scores from 0 to ${component.max_score}. Blank values remove a grade.`,
+      submit: 'Save grades'
+    }
+  );
+}
+
+async function gradeTeachingSection(parent, sectionId) {
+  parent.replaceChildren();
+  const sheet = await request(
+    `/api/grades/teaching/sections/${sectionId}/sheet/`
+  );
+
+  const head = card(parent, `${sheet.section.course_code} - ${sheet.section.course_name}`);
+  text(head, `Section ${sheet.section.number} - ${sheet.section.term}`);
+  text(head, `Total component weight: ${sheet.weight_total}%`, 'muted');
+  button(head, 'Back to sections', () => {
+    gradeSectionId = '';
+    return go('grades');
+  });
+
+  const components = card(parent, 'Grading components');
+  button(
+    components,
+    'Add component',
+    () => editor(
+      'New grading component',
+      gradeComponentFields(),
+      { weight: 0, max_score: 100, display_order: sheet.components.length + 1 },
+      values => request(
+        `/api/grades/teaching/sections/${sectionId}/components/`,
+        'POST',
+        values
+      ),
+      { after: () => gradeTeachingSection(parent, sectionId) }
+    ),
+    'primary'
+  );
+
+  sheet.components.forEach(component => {
+    const box = card(components, component.name);
+    add(box, badge(component.kind));
+    text(
+      box,
+      `${component.weight}% - max ${component.max_score} - ` +
+      `${component.grade_count} grades`,
+      'muted'
+    );
+    if (component.is_published) add(box, badge('Published'));
+
+    const actions = row(box);
+    button(actions, 'Enter grades', () => gradeEntryEditor(component, sheet));
+    button(actions, 'Download template', () => downloadGradeTemplate(component));
+
+    const upload = node('input');
+    upload.type = 'file';
+    upload.accept = '.csv,text/csv';
+    upload.hidden = true;
+    add(box, upload);
+    const importButton = button(actions, 'Import CSV', () => {
+      if (!upload.files?.[0]) {
+        upload.click();
+        return;
+      }
+      const form = new FormData();
+      form.append('file', upload.files[0]);
+      return request(
+        `/api/grades/teaching/components/${component.id}/grades/import/`,
+        'POST',
+        form
+      ).then(() => gradeTeachingSection(parent, sectionId));
+    });
+    upload.onchange = () => {
+      if (upload.files?.[0]) importButton.click();
+    };
+
+    button(actions, 'Edit', () => editor(
+      'Edit grading component',
+      gradeComponentFields(),
+      component,
+      values => request(
+        `/api/grades/teaching/components/${component.id}/`,
+        'PATCH',
+        values
+      ),
+      { after: () => gradeTeachingSection(parent, sectionId) }
+    ));
+
+    button(
+      actions,
+      component.is_published ? 'Unpublish' : 'Publish',
+      () => request(
+        `/api/grades/teaching/components/${component.id}/` +
+        (component.is_published ? 'unpublish/' : 'publish/'),
+        'POST',
+        {}
+      ).then(() => gradeTeachingSection(parent, sectionId))
+    );
+
+    if (!component.grade_count && !component.is_published) {
+      button(actions, 'Delete', () => confirmAction(
+        'Delete component?',
+        'This component has no grades and can be removed.',
+        () => request(
+          `/api/grades/teaching/components/${component.id}/`,
+          'DELETE'
+        ),
+        () => gradeTeachingSection(parent, sectionId)
+      ), 'danger');
+    }
+  });
+
+  if (!sheet.components.length) empty(components, 'No grading components have been created.');
+
+  const roster = card(parent, 'Grade sheet');
+  table(
+    roster,
+    [
+      'Student',
+      ...sheet.components.map(component => component.name),
+      'Average',
+      'Graded weight'
+    ],
+    sheet.students.map(student => [
+      gradeStudentName(student),
+      ...sheet.components.map(component =>
+        student.grades[String(component.id)] ?? '-'
+      ),
+      student.average ?? '-',
+      student.graded_weight == null ? '-' : `${student.graded_weight}%`
+    ])
+  );
+}
+
+pages.grades = async parent => {
+  if (is('STUDENT')) {
+    heading(parent, 'Grades', 'Published scores and course averages.');
+    if (!await termPicker(parent, () => go('grades'))) return;
+
+    const sections = await request('/api/grades/mine/' + termQuery());
+    if (!sections.length) {
+      empty(parent, 'No published grades are available for this term.');
+      return;
+    }
+
+    sections.forEach(item => {
+      const section = card(
+        parent,
+        `${item.course.code} - ${item.course.name}`
+      );
+      text(
+        section,
+        `Section ${item.section.number} - ${item.instructor || 'Instructor not assigned'}`,
+        'muted'
+      );
+      text(
+        section,
+        `Average: ${item.average ?? '-'} - ` +
+        `Graded weight: ${item.graded_weight ?? 0}% - ` +
+        `Earned: ${item.earned ?? '-'}`
+      );
+      table(
+        section,
+        ['Component', 'Weight', 'Score', 'Status'],
+        item.components.map(component => [
+          component.name,
+          `${component.weight}%`,
+          component.score == null
+            ? 'Not graded'
+            : `${component.score} / ${component.max_score}`,
+          component.is_published ? 'Published' : 'Pending'
+        ])
+      );
+    });
+    return;
+  }
+
+  heading(parent, 'Grades', 'Manage components and scores for your sections.');
+  if (!await termPicker(parent, () => go('grades'))) return;
+
+  if (gradeSectionId) {
+    await gradeTeachingSection(parent, gradeSectionId);
+    return;
+  }
+
+  await paged(
+    parent,
+    '/api/courses/my-sections/' + termQuery(),
+    (list, section) => {
+      const box = sectionCard(list, section);
+      button(box, 'Manage grades', () => {
+        gradeSectionId = String(section.id);
+        return go('grades');
+      }, 'primary');
+    }
+  );
+};
+
+const learningOutcomeFields = () => [
+  F('code', 'Code', 'text', { max: 16 }),
+  F('title', 'Title', 'text', { max: 200 }),
+  F('description', 'Description', 'textarea', { max: 4000 }),
+  num('display_order', 'Display order', { min: 1, value: 1 }),
+  check('is_active', 'Active', true)
+];
+
+async function editProgramLinks(outcome) {
+  const [programs, links] = await Promise.all([
+    all('/api/program-outcomes/'),
+    request(`/api/learning-outcomes/manage/${outcome.id}/program-links/`)
+  ]);
+  const initial = {};
+  links.forEach(link => {
+    initial['po_' + link.program_outcome] = link.weight;
+  });
+  const fields = programs.map(program => num(
+    'po_' + program.id,
+    `${program.code} - ${program.title}`,
+    { required: false, min: 1, maxValue: 100 }
+  ));
+
+  editor(
+    'Program outcome links - ' + outcome.code,
+    fields,
+    initial,
+    values => request(
+      `/api/learning-outcomes/manage/${outcome.id}/program-links/`,
+      'PUT',
+      {
+        links: programs
+          .map(program => ({
+            program_outcome: program.id,
+            weight: values['po_' + program.id]
+          }))
+          .filter(link => link.weight != null && link.weight !== '')
+      }
+    ),
+    {
+      notice: 'Weights are relative and may be different from 100% in total.',
+      submit: 'Save links'
+    }
+  );
+}
+
+async function learningCourseManager(parent) {
+  parent.replaceChildren();
+  add(parent, node('h2', '', 'Course learning outcomes'));
+  const courses = await all('/api/courses/manage/courses/');
+  if (!courses.length) {
+    empty(parent, 'No manageable courses are available.');
+    return;
+  }
+
+  const chooser = node('form', 'toolbar');
+  const select = inputField(
+    chooser,
+    choice(
+      'course',
+      'Course',
+      courses.map(course => [course.id, `${course.code} - ${course.name}`])
+    ),
+    learningCourseId || courses[0].id
+  );
+  const submit = node('button', 'primary', 'Open course');
+  submit.type = 'submit';
+  add(chooser, submit);
+  add(parent, chooser);
+
+  const content = node('div');
+  add(parent, content);
+  chooser.onsubmit = event => {
+    event.preventDefault();
+    learningCourseId = select.input.value;
+    return learningCourseManager(parent);
+  };
+
+  const courseId = learningCourseId || String(courses[0].id);
+  learningCourseId = courseId;
+  const outcomes = await all(`/api/learning-outcomes/manage/courses/${courseId}/`);
+  const section = card(content, 'Learning outcomes');
+  button(
+    section,
+    'Add learning outcome',
+    () => editor(
+      'New learning outcome',
+      learningOutcomeFields(),
+      {},
+      values => request(
+        `/api/learning-outcomes/manage/courses/${courseId}/`,
+        'POST',
+        values
+      ),
+      { after: () => learningCourseManager(parent) }
+    ),
+    'primary'
+  );
+
+  outcomes.forEach(outcome => {
+    const box = card(section, `${outcome.code} - ${outcome.title}`);
+    text(box, outcome.description, 'copy');
+    if (!outcome.is_active) add(box, badge('Inactive'));
+    button(box, 'Edit', () => editor(
+      'Edit learning outcome',
+      learningOutcomeFields(),
+      outcome,
+      values => request(
+        `/api/learning-outcomes/manage/${outcome.id}/`,
+        'PATCH',
+        values
+      ),
+      { after: () => learningCourseManager(parent) }
+    ));
+    button(box, 'Program outcome links', () => editProgramLinks(outcome));
+  });
+}
+
+async function learningSectionMatrix(parent, sectionId, managed = false) {
+  const matrix = await request(
+    `/api/learning-outcomes/${managed ? 'manage' : 'teaching'}/sections/${sectionId}/matrix/`
+  );
+  const title = card(
+    parent,
+    `${matrix.section.course_code} - ${matrix.section.course_name}`
+  );
+  text(title, `Section ${matrix.section.number}`);
+  button(title, 'Back to sections', () => {
+    learningSectionId = '';
+    return go('learningOutcomes');
+  });
+
+  matrix.components.forEach(component => {
+    const box = card(parent, component.name);
+    text(box, `${component.kind} - ${component.weight}%`, 'muted');
+    const fields = matrix.learning_outcomes.map(outcome => num(
+      'lo_' + outcome.id,
+      `${outcome.code} - ${outcome.title}`,
+      { required: false, min: 1, maxValue: 100 }
+    ));
+    const initial = Object.fromEntries(
+      matrix.learning_outcomes.map(outcome => [
+        'lo_' + outcome.id,
+        component.links[String(outcome.id)] ?? ''
+      ])
+    );
+    button(box, 'Edit component links', () => editor(
+      'Learning outcome links - ' + component.name,
+      fields,
+      initial,
+      values => request(
+        `/api/learning-outcomes/${managed ? 'manage' : 'teaching'}/components/${component.id}/links/`,
+        'PUT',
+        {
+          links: matrix.learning_outcomes
+            .map(outcome => ({
+              learning_outcome: outcome.id,
+              weight: values['lo_' + outcome.id]
+            }))
+            .filter(link => link.weight != null && link.weight !== '')
+        }
+      ),
+      { notice: 'Relative weights describe how much this component measures each outcome.' }
+    ));
+  });
+
+  if (!managed) {
+    const scores = await request(
+      `/api/learning-outcomes/teaching/sections/${sectionId}/scores/`
+    );
+    const scoreCard = card(parent, 'Learning outcome scores');
+    table(
+      scoreCard,
+      ['Student', ...scores.learning_outcomes.map(outcome => outcome.code)],
+      scores.students.map(student => [
+        gradeStudentName(student),
+        ...scores.learning_outcomes.map(outcome =>
+          student.scores[String(outcome.id)] ?? '-'
+        )
+      ])
+    );
+  }
+}
+
+function renderLearningProfile(parent, profile) {
+  text(
+    parent,
+    `${profile.student.student_no || 'Student'} - ` +
+    `Department ${profile.student.department || '-'}`,
+    'muted'
+  );
+  profile.program_outcomes.forEach(outcome => {
+    const box = card(parent, `${outcome.code} - ${outcome.title}`);
+    text(box, outcome.score == null ? 'No score yet.' : `Score: ${outcome.score}`);
+    if (outcome.courses?.length) {
+      table(
+        box,
+        ['Contributing course'],
+        outcome.courses.map(course => [course])
+      );
+    }
+  });
+}
+
+async function learningStudentProfile(parent) {
+  renderLearningProfile(parent, await request('/api/learning-outcomes/mine/'));
+}
+
+async function learningStudentDetail(id) {
+  const profile = await request(`/api/learning-outcomes/students/${id}/`);
+  const parent = modal('Program outcome profile');
+  renderLearningProfile(parent, profile);
+}
+
+async function learningStudentList(parent) {
+  const section = card(parent, 'Student program profiles');
+  await paged(
+    section,
+    '/api/learning-outcomes/students/',
+    (list, student) => {
+      const box = card(list, gradeStudentName(student));
+      text(box, `${student.email} - ${student.department_name || 'No department'}`, 'muted');
+      button(box, 'Open profile', () => learningStudentDetail(student.id));
+    }
+  );
+}
+
+pages.learningOutcomes = async parent => {
+  heading(
+    parent,
+    'Learning outcomes',
+    'Connect course outcomes, grading components and program outcomes.'
+  );
+
+  if (is('STUDENT')) {
+    await learningStudentProfile(parent);
+    return;
+  }
+
+  if (is('HEAD', 'ADMIN')) {
+    const manage = card(parent, 'Course learning outcomes');
+    await learningCourseManager(manage);
+
+    const managedSections = card(parent, 'Managed section matrices');
+    if (!await termPicker(managedSections, () => go('learningOutcomes'))) return;
+    if (learningSectionId && learningManagedSection) {
+      await learningSectionMatrix(managedSections, learningSectionId, true);
+      return;
+    }
+    await paged(
+      managedSections,
+      '/api/courses/manage/sections/' + termQuery(),
+      (list, section) => {
+        const box = sectionCard(list, section);
+        button(box, 'Open managed matrix', () => {
+          learningSectionId = String(section.id);
+          learningManagedSection = true;
+          return go('learningOutcomes');
+        }, 'primary');
+      }
+    );
+    await learningStudentList(parent);
+  }
+
+  if (is('INSTRUCTOR', 'HEAD')) {
+    const teaching = card(parent, 'Teaching section matrix');
+    if (!await termPicker(teaching, () => go('learningOutcomes'))) return;
+
+    if (learningSectionId && !learningManagedSection) {
+      await learningSectionMatrix(teaching, learningSectionId);
+      return;
+    }
+
+    await paged(
+      teaching,
+      '/api/courses/my-sections/' + termQuery(),
+      (list, section) => {
+        const box = sectionCard(list, section);
+        button(box, 'Open outcome matrix', () => {
+          learningSectionId = String(section.id);
+          learningManagedSection = false;
+          return go('learningOutcomes');
+        }, 'primary');
+      }
+    );
+  }
+};
+
+function courseFields() {
+  return [
+    F('code', 'Course code'),
+    F('name', 'Course name'),
+    num('credit', 'Credits'),
+    num('ects', 'ECTS'),
+    num('theory_hours', 'Theory hours', { value: 0 }),
+    num('practice_hours', 'Practice hours', { value: 0 }),
+    idList('prerequisites', 'Prerequisite course record numbers'),
+    check('is_active', 'Active', true)
+  ];
+}
+
+function termFields() {
+  return [
+    num('year', 'Year', {
+      min: 2000,
+      value: new Date().getFullYear()
+    }),
+    choice('season', 'Season', ['FALL', 'SPRING', 'SUMMER']),
+    F('registration_start', 'Registration opens', 'datetime'),
+    F('registration_end', 'Registration closes', 'datetime'),
+    F('add_drop_start', 'Add/drop opens', 'datetime'),
+    F('add_drop_end', 'Add/drop closes', 'datetime'),
+    num('max_credit', 'Credit limit', { value: 24 }),
+    num('max_ects', 'ECTS limit', { value: 30 })
+  ];
+}
+
+async function sectionEditor(data = {}) {
+  const courses = await all('/api/courses/manage/courses/');
+  await ensureTerms();
+
+  editor(
+    data.id ? 'Edit section' : 'New section',
+    [
+      choice(
+        'course',
+        'Course',
+        courses.map(course => [
+          course.id,
+          course.code + ' · ' + course.name
+        ]),
+        { numeric: true }
+      ),
+      choice('term', 'Term', termOptions(), { numeric: true }),
+      num('number', 'Section number', { min: 1 }),
+      opt('instructor', 'Instructor account number', 'number', {
+        min: 1,
+        help: 'Use the account record number supplied by your administrator.'
+      }),
+      num('quota', 'Seat quota', { min: 1 }),
+      F('meeting_times', 'Meetings', 'meetings')
+    ],
+    data,
+    values => request(
+      '/api/courses/manage/sections/' + (data.id ? data.id + '/' : ''),
+      data.id ? 'PATCH' : 'POST',
+      values
+    )
+  );
+}
+
+async function planEditor(data = {}) {
+  await ensureTerms();
+  departments = await all('/api/departments/');
+
+  const fields = [
+    choice(
+      'department',
+      'Department',
+      departmentOptions(),
+      { numeric: true, required: is('ADMIN') }
+    ),
+    choice('term', 'Term', termOptions(), { numeric: true }),
+    num('class_year', 'Class year', { min: 1 }),
+    idList('mandatory_courses', 'Mandatory course record numbers'),
+    num('elective_count', 'Required elective count', { value: 0 })
+  ];
+
+  if (is('ADMIN')) {
+    fields.push(
+      idList('elective_options', 'Offered elective course record numbers')
+    );
+  }
+
+  editor(
+    data.id ? 'Edit term plan' : 'New term plan',
+    fields,
+    { department: session.user.department, ...data },
+    values => {
+      if (!values.department) delete values.department;
+
+      return request(
+        '/api/courses/manage/plans/' + (data.id ? data.id + '/' : ''),
+        data.id ? 'PATCH' : 'POST',
+        values
+      );
+    }
+  );
+}
+
+pages.management = async parent => {
+  heading(
+    parent,
+    'Academic management',
+    is('HEAD')
+      ? 'Manage mandatory courses and plans for your department.'
+      : 'Manage university electives, academic terms and departments.'
+  );
+
+  await ensureTerms();
+
+  const items = [
+    ['courses', 'Courses'],
+    ['sections', 'Sections'],
+    ['plans', 'Term plans']
+  ];
+
+  if (is('ADMIN')) {
+    items.push(['terms', 'Terms'], ['departments', 'Departments']);
+  }
+
+  tabs(parent, items, managementTab, value => {
+    managementTab = value;
+    return go('management');
+  });
+
+  if (managementTab === 'courses') {
+    button(
+      parent,
+      'Add course',
+      () => editor(
+        'New course',
+        courseFields(),
+        {},
+        values => request('/api/courses/manage/courses/', 'POST', values)
+      ),
+      'primary'
+    );
+
+    await paged(
+      parent,
+      '/api/courses/manage/courses/',
+      (list, course) => {
+        const box = card(list, course.code + ' · ' + course.name);
+
+        text(
+          box,
+          `Record ${course.id} · ${human(course.kind)} · ` +
+          `${course.credit} credits · ${course.ects} ECTS · ` +
+          (course.is_active ? 'Active' : 'Inactive'),
+          'muted'
+        );
+
+        button(box, 'Edit course', () => editor(
+          'Edit course',
+          courseFields(),
+          course,
+          values => request(
+            `/api/courses/manage/courses/${course.id}/`,
+            'PATCH',
+            values
+          )
+        ));
+      }
+    );
+  } else if (managementTab === 'sections') {
+    button(parent, 'Add section', () => sectionEditor(), 'primary');
+
+    await paged(
+      parent,
+      '/api/courses/manage/sections/',
+      (list, section) => {
+        const box = card(
+          list,
+          `Section ${section.number} · Course record ${section.course}`
+        );
+
+        text(
+          box,
+          `${termName(section.term)} · ` +
+          `${section.seats_taken}/${section.quota} seats taken · ` +
+          `Record ${section.id}`
+        );
+
+        const actions = row(box);
+
+        button(actions, 'Edit', () => sectionEditor(section));
+
+        button(
+          actions,
+          'View students',
+          () => roster(
+            `/api/courses/manage/sections/${section.id}/students/`,
+            'Section ' + section.number
+          )
+        );
+
+        button(
+          actions,
+          'Delete',
+          () => confirmAction(
+            'Delete section?',
+            'Only sections without registered students can be deleted.',
+            () => request(
+              `/api/courses/manage/sections/${section.id}/`,
+              'DELETE'
+            )
+          ),
+          'danger'
+        );
+      }
+    );
+  } else if (managementTab === 'plans') {
+    button(parent, 'Add term plan', () => planEditor(), 'primary');
+
+    await paged(
+      parent,
+      '/api/courses/manage/plans/',
+      (list, plan) => {
+        const section = card(
+          list,
+          `${termName(plan.term)} · Year ${plan.class_year}`
+        );
+
+        text(
+          section,
+          `Department record ${plan.department} · ` +
+          `${plan.elective_count} required electives`
+        );
+
+        text(
+          section,
+          'Mandatory: ' +
+          (plan.mandatory_courses.map(course => course.code).join(', ') || 'None')
+        );
+
+        text(
+          section,
+          'Electives: ' +
+          (plan.elective_options.map(course => course.code).join(', ') || 'None')
+        );
+
+        const actions = row(section);
+
+        button(actions, 'Edit plan', () => planEditor(plan));
+
+        button(
+          actions,
+          'Delete plan',
+          () => confirmAction(
+            'Delete term plan?',
+            'Students will no longer be able to register using this plan.',
+            () => request(
+              `/api/courses/manage/plans/${plan.id}/`,
+              'DELETE'
+            )
+          ),
+          'danger'
+        );
+      }
+    );
+  } else if (managementTab === 'terms') {
+    button(
+      parent,
+      'Add term',
+      () => editor(
+        'New academic term',
+        termFields(),
+        {},
+        async values => {
+          const result = await request('/api/courses/terms/', 'POST', values);
+          terms = [];
+          return result;
+        }
+      ),
+      'primary'
+    );
+
+    await paged(parent, '/api/courses/terms/', (list, term) => {
+      const section = card(list, `${term.year} ${human(term.season)}`);
+
+      text(
+        section,
+        `Registration: ${date(term.registration_start)} – ` +
+        date(term.registration_end)
+      );
+
+      text(
+        section,
+        `Add/drop: ${date(term.add_drop_start)} – ${date(term.add_drop_end)}`
+      );
+
+      text(
+        section,
+        `${term.max_credit} credits · ${term.max_ects} ECTS maximum`,
+        'muted'
+      );
+
+      button(section, 'Edit term', () => editor(
+        'Edit academic term',
+        termFields(),
+        term,
+        async values => {
+          const result = await request(
+            `/api/courses/terms/${term.id}/`,
+            'PATCH',
+            values
+          );
+
+          terms = [];
+          return result;
+        }
+      ));
+    });
+  } else {
+    const fields = [
+      F('code', 'Code'),
+      F('name', 'Name'),
+      F('language', 'Teaching language'),
+      check('is_active', 'Active', true)
+    ];
+
+    button(
+      parent,
+      'Add department',
+      () => editor(
+        'New department',
+        fields,
+        {},
+        values => request('/api/departments/', 'POST', values)
+      ),
+      'primary'
+    );
+
+    await paged(parent, '/api/departments/', (list, department) => {
+      const section = card(
+        list,
+        department.code + ' · ' + department.name
+      );
+
+      text(
+        section,
+        `${department.language} · Record ${department.id} · ` +
+        (department.is_active ? 'Active' : 'Inactive'),
+        'muted'
+      );
+
+      button(section, 'Edit', () => editor(
+        'Edit department',
+        fields,
+        department,
+        values => request(
+          `/api/departments/${department.id}/`,
+          'PATCH',
+          values
+        )
+      ));
+    });
+  }
+};
+
+pages.libraryAdmin = async parent => {
+  heading(
+    parent,
+    'Library management',
+    'Study rooms, reservations and booking restrictions.'
+  );
+
+  tabs(
+    parent,
+    [
+      ['rooms', 'Rooms'],
+      ['reservations', 'Reservations'],
+      ['bans', 'Restrictions']
+    ],
+    libraryAdminTab,
+    value => {
+      libraryAdminTab = value;
+      return go('libraryAdmin');
+    }
+  );
+
+  if (libraryAdminTab === 'rooms') {
+    const fields = [
+      F('name', 'Room name', 'text', { max: 80 }),
+      F('location', 'Location', 'text', { max: 160 }),
+      check('is_active', 'Active', true)
+    ];
+
+    button(
+      parent,
+      'Add room',
+      () => editor(
+        'New study room',
+        fields,
+        {},
+        values => request('/api/library/admin/rooms/', 'POST', values)
+      ),
+      'primary'
+    );
+
+    await paged(
+      parent,
+      '/api/library/admin/rooms/',
+      (list, room) => {
+        const section = card(list, room.name);
+
+        text(
+          section,
+          `${room.location || 'No location'} · ` +
+          (room.is_active ? 'Active' : 'Inactive')
+        );
+
+        button(section, 'Edit room', () => editor(
+          'Edit study room',
+          fields,
+          room,
+          values => request(
+            `/api/library/admin/rooms/${room.id}/`,
+            'PATCH',
+            values
+          )
+        ));
+      }
+    );
+  } else if (libraryAdminTab === 'reservations') {
+    await paged(
+      parent,
+      '/api/library/admin/reservations/?period=all',
+      (list, reservation) => {
+        const section = card(list, reservation.room_name);
+
+        text(
+          section,
+          `${reservation.student_name || 'Student'} · ` +
+          `${reservation.student_no || 'No student number'} · ` +
+          `Account ${reservation.student}`
+        );
+
+        text(
+          section,
+          `${date(reservation.starts_at)} – ${date(reservation.ends_at)}`
+        );
+
+        add(section, badge(reservation.status));
+
+        if (reservation.cancellation_reason) {
+          text(section, reservation.cancellation_reason);
+        }
+
+        if (reservation.can_cancel) {
+          button(section, 'Cancel reservation', () => editor(
+            'Cancel reservation',
+            [F('reason', 'Reason', 'textarea', { max: 500 })],
+            {},
+            values => request(
+              `/api/library/admin/reservations/${reservation.id}/cancel/`,
+              'POST',
+              values
+            ),
+            { submit: 'Cancel reservation' }
+          ));
+        }
+      }
+    );
+  } else {
+    button(
+      parent,
+      'Add restriction',
+      () => editor(
+        'Restrict library reservations',
+        [
+          num('student', 'Student account number', { min: 1 }),
+          F('reason', 'Reason', 'textarea', { max: 500 })
+        ],
+        {},
+        values => request('/api/library/admin/bans/', 'POST', values),
+        {
+          notice:
+            'Existing future reservations for this student will also be cancelled.',
+          submit: 'Apply restriction'
+        }
+      ),
+      'primary'
+    );
+
+    await paged(
+      parent,
+      '/api/library/admin/bans/',
+      (list, restriction) => {
+        const section = card(
+          list,
+          restriction.student_name || 'Student account ' + restriction.student
+        );
+
+        text(
+          section,
+          `${restriction.student_no || '—'} · ` +
+          (restriction.is_active ? 'Active restriction' : 'Lifted')
+        );
+
+        text(section, restriction.reason, 'copy');
+
+        if (restriction.is_active) {
+          button(section, 'Lift restriction', () => confirmAction(
+            'Lift restriction?',
+            'This student will be able to reserve rooms again.',
+            () => request(
+              `/api/library/admin/bans/${restriction.id}/lift/`,
+              'POST',
+              {}
+            )
+          ));
+        }
+      }
+    );
+  }
+};
+
+pages.users = async parent => {
+  heading(
+    parent,
+    'User accounts',
+    'Create institutional accounts and manage academic assignments.'
+  );
+
+  departments = await all('/api/departments/');
+
+  const fields = [
+    F('email', 'Email address', 'email'),
+    opt('first_name', 'First name'),
+    opt('last_name', 'Last name'),
+    choice(
+      'role',
+      'Role',
+      ['STUDENT', 'INSTRUCTOR', 'HEAD', 'ADMIN'],
+      { value: 'STUDENT' }
+    ),
+    opt('student_no', 'Student number'),
+    choice(
+      'department',
+      'Department',
+      departmentOptions(),
+      { numeric: true, required: false }
+    ),
+    opt('advisor', 'Advisor account number', 'number', { min: 1 }),
+    opt('class_year', 'Class year', 'number', { min: 1, maxValue: 6 })
+  ];
+
+  button(
+    parent,
+    'Create account',
+    () => editor(
+      'New institutional account',
+      fields,
+      {},
+      values => {
+        if (values.role !== 'STUDENT') {
+          values.student_no = null;
+          values.advisor = null;
+          values.class_year = null;
+        }
+
+        if (values.role === 'ADMIN') values.department = null;
+
+        return request('/api/auth/users/', 'POST', values);
+      },
+      {
+        notice:
+          'The account receives a temporary password by email and must ' +
+          'change it at first sign-in.',
+        submit: 'Create account',
+        after: user => {
+          const box = modal('Account created');
+
+          text(box, `Account ${user.id} · ${user.email}`);
+
+          if (user.temporary_password) {
+            text(box, 'Temporary password', 'muted');
+            text(box, user.temporary_password, 'copy');
+
+            text(
+              box,
+              'Share this only with the account owner. ' +
+              'It will disappear when this window closes.',
+              'notice'
+            );
+          }
+        }
+      }
+    ),
+    'primary'
+  );
+
+  const section = card(parent, 'Academic assignment');
+  const form = node('form', 'toolbar');
+
+  const id = inputField(
+    form,
+    num('user', 'Account record number', { min: 1 })
+  );
+
+  const submit = node('button', 'primary', 'Find account');
+  submit.type = 'submit';
+
+  add(form, submit);
+  add(section, form);
+
+  const message = node('p', 'message');
+  add(section, message);
+
+  form.onsubmit = async event => {
+    event.preventDefault();
+    if (submit.disabled) return;
+
+    submit.disabled = true;
+    message.textContent = '';
+
+    try {
+      const user = await request(`/api/auth/users/${id.read()}/`);
+
+      editor(
+        'Assignment · ' + user.email,
+        [
+          choice(
+            'department',
+            'Department',
+            departmentOptions(),
+            {
+              numeric: true,
+              required: user.role !== 'ADMIN'
+            }
+          ),
+          opt('advisor', 'Advisor account number', 'number', { min: 1 }),
+          opt('class_year', 'Class year', 'number', {
+            min: 1,
+            maxValue: 6
+          })
+        ],
+        user,
+        values => request(
+          `/api/auth/users/${user.id}/`,
+          'PATCH',
+          values
+        )
+      );
+    } catch (error) {
+      message.textContent = error.message;
+    } finally {
+      submit.disabled = false;
+    }
+  };
+};
+
+pages.profile = async parent => {
+  const user = await request('/api/auth/me/');
+  session.user = user;
+
+  heading(
+    parent,
+    'My account',
+    'Your institutional account details.'
+  );
+
+  departments = await all('/api/departments/');
+  const department = departments.find(item => item.id === user.department);
+
+  const section = card(parent, person(user));
+
+  table(section, ['Detail', 'Value'], [
+    ['Email', user.email],
+    ['Role', human(user.role)],
+    ['Student number', user.student_no],
+    ['Department', department ? department.name : 'Not assigned'],
+    ['Class year', user.class_year],
+    ['Advisor account', user.advisor]
+  ]);
+
+  button(section, 'Change password', () => editor(
+    'Change password',
+    [
+      F('old_password', 'Current password', 'password'),
+      F('new_password', 'New password', 'password'),
+      F('confirmation', 'Confirm new password', 'password')
+    ],
+    {},
+    values => request('/api/auth/change-password/', 'POST', {
+      old_password: values.old_password,
+      new_password: values.new_password
+    }),
+    {
+      validate: values => {
+        if (values.new_password !== values.confirmation) {
+          throw new Error('The passwords do not match.');
+        }
+      },
+      after: () => signOut(
+        'Your password was updated. Please sign in again.'
+      )
+    }
+  ));
+};
